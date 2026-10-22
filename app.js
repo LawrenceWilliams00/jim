@@ -392,7 +392,7 @@ const A = {
     else if (f === 'rest') t.rest = clamp((t.rest || 0) + dv * 15, 0, 600);
     else if (f === 'ssrest') { const bl = sheetBlock(); bl.rest = clamp((bl.rest || 0) + dv * 15, 0, 600); }
     else if (f === 'warm') t.warm = clamp((t.warm || 0) + dv, 0, 4);
-    else if (f === 'step') { const ex = exById(t.exId); if (ex) { const i = STEPS.indexOf(ex.step); ex.step = STEPS[clamp((i < 0 ? 4 : i) + dv, 0, STEPS.length - 1)]; saveEx(ex); } }
+    else if (f === 'step') { const ex = exById(t.exId); if (ex) { const cur = ex.step || 2.5; ex.step = dv > 0 ? (STEPS.find(x => x > cur + 1e-9) || STEPS[STEPS.length - 1]) : (STEPS.slice().reverse().find(x => x < cur - 1e-9) || STEPS[0]); saveEx(ex); } }
     changed(); },
   repMode: d => { const t = sheetSlot(); if (!t) return; t.range = d.v === 'range'; if (t.range && (t.hi || 0) <= t.lo) t.hi = t.lo + 2; S.settings.rangeMode = t.range; saveSettings(); changed(); },
   item: d => { const bl = sheetBlock(); if (!bl) return; const it = bl.items[+d.i]; if (d.f === 'ticks') it.ticks = clamp((it.ticks || 1) + +d.d, 1, 6); if (d.f === 'timer') it.timer = clamp((it.timer || 0) + +d.d, 0, 60); changed(); },
@@ -453,7 +453,7 @@ const A = {
   padDone: () => { const sh = UI.sheet, c = S.cur, t = target(c), v = parseFloat(sh.buf); UI.sheet = null; if (t && sh.buf !== '' && !isNaN(v)) { const b = liftAt(c, t), x = b.sets[t.i]; if (sh.work) b.sets.forEach(y => { if (y.kind === 'work' && isOpen(y)) y.kg = r2(v); }); else if (sh.field === 'reps') { x.reps = Math.round(v); x.touched = true; } else { x.kg = r2(v); x.touched = true; } refreshWarm(b); touchCur(); } render(); },
   // exercise info during training
   openEx: d => { const pos = { bi: +d.bi }; if (d.p != null && d.p !== '') pos.p = +d.p; openSheet({ type: 'ex', pos }); },
-  restAdj: d => { const blk = S.cur.blocks[UI.sheet.pos.bi]; blk.rest = clamp((blk.rest || 0) + +d.d, 0, 600); if (blk.kind === 'ss') blk.parts.forEach(p => { p.rest = blk.rest; }); const hit = slotFromSrc(blk.src); if (hit && (blk.kind === 'ss' ? hit.bl.kind === 'ss' : hit.bl.exId === blk.exId)) { hit.bl.rest = blk.rest; saveRoutine(hit.r); } touchCur(); render(); },
+  restAdj: d => { setTrainRest((S.cur.blocks[UI.sheet.pos.bi].rest || 0) + +d.d); render(); },
   // finish
   askFinish: () => openSheet({ type: 'finish' }),
   finish: () => finish(),
@@ -479,6 +479,18 @@ $app.addEventListener('click', e => {
   fn(el.dataset);
 });
 $app.addEventListener('pointerdown', () => { if (S.cur) unlockAudio(); }, { passive: true });
+$app.addEventListener('focusin', e => {
+  const el = e.target; if (!el.classList || !el.classList.contains('stpv')) return;
+  el.dataset.orig = el.value;
+  if (el.dataset.k === 'dec') el.value = el.value.replace(/\s*kg$/, '');
+  else if (el.dataset.k === 'min') el.value = el.value === 'Off' ? '' : String(parseInt(el.value, 10) || '');
+  el.dataset.raw = el.value;
+  el.select(); el.dataset.fresh = '1';
+});
+// The tap that focused a field also drops the caret where the finger was; select the whole number again so typing replaces it.
+$app.addEventListener('click', e => { const el = e.target; if (el.classList && el.classList.contains('stpv') && el.dataset.fresh) { el.dataset.fresh = ''; el.select(); } });
+$app.addEventListener('focusout', e => { const el = e.target; if (el.classList && el.classList.contains('stpv') && el.value === el.dataset.raw) el.value = el.dataset.orig; });
+$app.addEventListener('change', e => { if (e.target.classList && e.target.classList.contains('stpv')) commitField(e.target); });
 $app.addEventListener('change', e => {
   if (e.target.id !== 'restore-file' || !e.target.files || !e.target.files[0]) return;
   e.target.files[0].text().then(t => {
@@ -556,6 +568,7 @@ function goBack() {
 }
 window.addEventListener('popstate', e => {
   if (ignorePop) { ignorePop--; return; }
+  commitPending();
   hDepth = (e.state && e.state.d) || 0;
   goBack();
 });
@@ -793,7 +806,69 @@ function summaryScreen() {
 }
 
 // ---------- sheets ----------
-const stp = (label, f, val, act, extra) => '<div class="stp"><span>' + label + '</span><div class="ctl"><button class="sq" data-a="' + (act || 'ef') + '" data-f="' + f + '" data-d="-1"' + (extra || '') + ' aria-label="' + label + ', less">' + ICON.minus + '</button><b>' + val + '</b><button class="sq" data-a="' + (act || 'ef') + '" data-f="' + f + '" data-d="1"' + (extra || '') + ' aria-label="' + label + ', more">' + ICON.plus + '</button></div></div>';
+// A stepper row. The number between − and + is a field too: tap it and type.
+// o.kind: 'int' (default), 'dec' (has a decimal point, e.g. kg), 'dur' (rest time), 'min' (timer minutes, 0 = Off).
+function stp(label, f, val, o) {
+  o = o || {};
+  const act = o.act || 'ef', name = o.name || label, d = o.d || 1, kind = o.kind || 'int';
+  const extra = o.i != null ? ' data-i="' + o.i + '"' : '', id = 'v-' + f + (o.i != null ? '-' + o.i : '');
+  const btn = (sign, word, icon) => '<button class="sq" data-a="' + act + '" data-f="' + f + '" data-d="' + sign + d + '"' + extra + ' aria-label="' + esc(name) + ', ' + word + '">' + icon + '</button>';
+  return '<div class="stp"><span class="stpl">' + label + (kind === 'dur' ? '<small class="hint">Seconds, or like 2.30</small>' : '') + '</span><div class="ctl">' + btn('-', 'less', ICON.minus) +
+    '<input class="stpv" id="' + id + '" value="' + esc(val) + '" data-sf="' + f + '" data-sact="' + act + '" data-k="' + kind + '"' + extra + ' inputmode="' + (kind === 'dec' || kind === 'dur' ? 'decimal' : 'numeric') + '" enterkeyhint="done" autocomplete="off" aria-label="' + esc(name) + '">' +
+    btn('', 'more', ICON.plus) + '</div></div>';
+}
+// What a typed value means. null = not a number we can use.
+function parseField(kind, raw) {
+  const s = String(raw).trim().toLowerCase();
+  let m;
+  if (kind === 'min' && (s === '' || s === 'off')) return 0;
+  if (kind === 'dec') return /^\d*[.,]?\d+$/.test(s) ? parseFloat(s.replace(',', '.')) : null;
+  if (kind === 'dur') {
+    if (/^\d+$/.test(s)) { const n = +s; return n <= 9 ? n * 60 : n; } // 90 = 90 s, 3 = 3 min
+    if ((m = s.match(/^(\d+)[:.,](\d{1,2})$/))) return +m[1] * 60 + (m[2].length === 1 ? +m[2] * 10 : +m[2]); // 2.30 = 2:30
+    return null;
+  }
+  return /^\d+$/.test(s) ? +s : null;
+}
+// Current text for a field, read back from the data (so clamping shows).
+function fieldText(act, f, i) {
+  if (act === 'restAdj') return secTxt(S.cur.blocks[UI.sheet.pos.bi].rest || 0);
+  if (act === 'item') { const it = sheetBlock().items[i]; return f === 'ticks' ? String(it.ticks || 1) : it.timer ? it.timer + ' min' : 'Off'; }
+  const t = sheetSlot(); if (!t) return '';
+  if (f === 'sets') return String(t.sets || 3);
+  if (f === 'lo') return String(t.lo);
+  if (f === 'hi') return String(Math.max(t.lo, t.hi || t.lo));
+  if (f === 'rest') return secTxt(t.rest || 0);
+  if (f === 'ssrest') return secTxt(sheetBlock().rest || 0);
+  if (f === 'warm') return String(t.warm || 0);
+  if (f === 'step') { const ex = exById(t.exId); return fmt((ex && ex.step) || 2.5) + ' kg'; }
+  return '';
+}
+function setSlotField(f, v) {
+  const t = sheetSlot(); if (!t) return;
+  if (f === 'sets') t.sets = clamp(Math.round(v), 1, 12);
+  else if (f === 'lo') { t.lo = clamp(Math.round(v), 1, 100); if ((t.hi || 0) < t.lo) t.hi = t.lo; }
+  else if (f === 'hi') t.hi = clamp(Math.round(v), t.lo || 1, 100);
+  else if (f === 'rest') t.rest = clamp(Math.round(v), 0, 600);
+  else if (f === 'ssrest') { const bl = sheetBlock(); bl.rest = clamp(Math.round(v), 0, 600); }
+  else if (f === 'warm') t.warm = clamp(Math.round(v), 0, 4);
+  else if (f === 'step') { const ex = exById(t.exId); if (ex) { ex.step = clamp(r2(v), 0.25, 50); saveEx(ex); } }
+  saveRoutine(curRoutine());
+}
+function setItemField(i, f, v) { const bl = sheetBlock(); if (!bl) return; const it = bl.items[i]; if (f === 'ticks') it.ticks = clamp(Math.round(v), 1, 6); if (f === 'timer') it.timer = clamp(Math.round(v), 0, 60); saveRoutine(curRoutine()); }
+function setTrainRest(v) {
+  const blk = S.cur.blocks[UI.sheet.pos.bi]; blk.rest = clamp(Math.round(v), 0, 600);
+  if (blk.kind === 'ss') blk.parts.forEach(p => { p.rest = blk.rest; });
+  const hit = slotFromSrc(blk.src); if (hit && (blk.kind === 'ss' ? hit.bl.kind === 'ss' : hit.bl.exId === blk.exId)) { hit.bl.rest = blk.rest; saveRoutine(hit.r); }
+  touchCur();
+}
+// Store a typed value. The screen isn't rebuilt here: this runs as the field loses focus, often because a finger is
+// landing on − or +, and rebuilding now would swallow that tap. The fields just show the stored values.
+function commitField(el) {
+  const v = parseField(el.dataset.k, el.value), act = el.dataset.sact, f = el.dataset.sf, i = el.dataset.i != null ? +el.dataset.i : null;
+  if (v != null) { if (act === 'restAdj') setTrainRest(v); else if (act === 'item') setItemField(i, f, v); else setSlotField(f, v); }
+  document.querySelectorAll('.stpv').forEach(x => { const txt = fieldText(x.dataset.sact, x.dataset.sf, x.dataset.i != null ? +x.dataset.i : null); x.value = txt; x.dataset.orig = txt; x.dataset.raw = txt; });
+}
 function moveRow(count, idx, canRemove) {
   if (count <= 1 && !canRemove) return '';
   if (count <= 1) return '<div class="moverow"><button class="rm" data-a="remove">Remove</button></div>';
@@ -832,7 +907,7 @@ function slotSheet() {
     (used.length ? '<p class="dim small" style="margin-top:6px">Also in ' + esc(used.join(', ')) + '</p>' : ''),
     '<div style="margin-top:8px">' + stp('Sets', 'sets', t.sets || 3) +
     '<div class="stp"><span>Reps</span><div class="seg2" role="group" aria-label="Fixed reps or a range"><button class="' + (t.range ? '' : 'on') + '" data-a="repMode" data-v="single" aria-pressed="' + !t.range + '">Fixed</button><button class="' + (t.range ? 'on' : '') + '" data-a="repMode" data-v="range" aria-pressed="' + !!t.range + '">Range</button></div></div>' + reps +
-    (isPart ? '' : stp('Rest', 'rest', secTxt(t.rest || 0))) + stp('Warm-up sets', 'warm', t.warm || 0) + stp('Goes up by', 'step', fmt(ex.step || 2.5) + ' kg') + '</div>' +
+    (isPart ? '' : stp('Rest', 'rest', secTxt(t.rest || 0), { kind: 'dur' })) + stp('Warm-up sets', 'warm', t.warm || 0) + stp('Goes up by', 'step', fmt(ex.step || 2.5) + ' kg', { kind: 'dec' }) + '</div>' +
     moveRow(count, idx, isPart || !sh.isNew),
     '', { title: isPart ? 'Superset exercise' : 'Exercise', cancel: 'cancel', done: 'done' });
 }
@@ -841,14 +916,14 @@ function ssSheet() {
   const parts = bl.parts.map((p, i) => '<button class="partrow" data-a="openPart" data-p="' + i + '"><span class="badge o" aria-hidden="true">' + LETTERS[i] + '</span><span style="flex:1;min-width:0"><b style="display:block;font-size:17px">' + esc(exName(p.exId)) + '</b><span class="dim small">' + (p.sets || 3) + ' × ' + repsTxt(p) + '</span></span>' + ICON.chev + '</button>').join('');
   return sheetBox('Superset', '',
     '<div style="margin-top:4px">' + parts + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addPart">' + ICON.plus + (bl.parts.length ? ' Add another' : ' Add an exercise') + '</button>' +
-    '<div style="margin-top:12px">' + stp('Rest after round', 'ssrest', secTxt(bl.rest || 0)) + '</div>' + moveRow(r.blocks.length, sh.bi, !sh.isNew),
+    '<div style="margin-top:12px">' + stp('Rest after round', 'ssrest', secTxt(bl.rest || 0), { kind: 'dur' }) + '</div>' + moveRow(r.blocks.length, sh.bi, !sh.isNew),
     '', { title: 'Superset', cancel: 'cancel', done: 'done' });
 }
 function checkSheet() {
   const sh = UI.sheet, bl = sheetBlock(), r = curRoutine(); if (!bl) return '';
   const items = bl.items.map((it, i) => '<div class="item"><div class="two"><input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="text" value="' + esc(it.text) + '" placeholder="Item" aria-label="Item ' + (i + 1) + '" style="flex:1.4;min-width:0"><input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="detail" value="' + esc(it.detail) + '" placeholder="2 × 15" aria-label="Item ' + (i + 1) + ' detail" style="flex:1;min-width:0"><button class="xbtn" data-a="delItem" data-i="' + i + '" aria-label="Remove item ' + (i + 1) + '">' + ICON.x + '</button></div>' +
-    stp('Ticks', 'ticks', it.ticks || 1, 'item', ' data-i="' + i + '"').replace(/aria-label="Ticks, (less|more)"/g, (m, w) => 'aria-label="Ticks for item ' + (i + 1) + ', ' + w + '"') +
-    stp('Timer', 'timer', it.timer ? it.timer + ' min' : 'Off', 'item', ' data-i="' + i + '"').replace(/aria-label="Timer, (less|more)"/g, (m, w) => 'aria-label="Timer for item ' + (i + 1) + ', ' + w + '"') + '</div>').join('');
+    stp('Ticks', 'ticks', it.ticks || 1, { act: 'item', i, name: 'Ticks for item ' + (i + 1) }) +
+    stp('Timer', 'timer', it.timer ? it.timer + ' min' : 'Off', { act: 'item', i, kind: 'min', name: 'Timer for item ' + (i + 1) }) + '</div>').join('');
   return sheetBox('Checklist',
     '<input id="c-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" style="margin-top:4px" data-f="cname" value="' + esc(bl.name) + '" placeholder="Checklist name" aria-label="Checklist name">',
     '<div style="margin-top:6px">' + items + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addItem">' + ICON.plus + ' Add an item</button>' + moveRow(r.blocks.length, sh.bi, !sh.isNew),
@@ -889,7 +964,7 @@ function exSheet() {
   const hist = historyFor(b.exId, 6), rest = blk.rest;
   return sheetBox(b.name, '',
     '<label class="lbl" for="notes" style="margin-top:4px">Notes</label><textarea id="notes" data-ex="' + esc(b.exId) + '" placeholder="Cues, settings, rules">' + esc(ex.notes || '') + '</textarea>' +
-    '<div style="margin-top:8px">' + stp(blk.kind === 'ss' ? 'Rest after round' : 'Rest', 'rest', secTxt(rest), 'restAdj').replace('data-d="-1"', 'data-d="-15"').replace('data-d="1"', 'data-d="15"') + '</div>' +
+    '<div style="margin-top:8px">' + stp(blk.kind === 'ss' ? 'Rest after round' : 'Rest', 'rest', secTxt(rest), { act: 'restAdj', d: 15, kind: 'dur' }) + '</div>' +
     '<label class="lbl">History</label>' +
     (hist.length ? hist.map(h => '<div class="hrow">' + esc(h.sets.map(x => x.reps).join(', ') + ' @ ' + kgVal(h.sets[0].kg) + unit(h.sets[0].kg)) + '<span>' + esc(dateTxt(h.at) + ', ' + h.name) + '</span></div>').join('') : '<p class="dim" style="margin-top:6px">Nothing yet</p>') +
     '<button class="wide" data-a="later">Do this later</button>', '', { title: b.name, done: 'close' });
@@ -924,7 +999,10 @@ function sheetHtml() {
   if (!c) return '';
   return ty === 'pad' ? padSheet() : ty === 'change' ? changeSheet() : ty === 'ex' ? exSheet() : ty === 'finish' ? finishSheet() : '';
 }
+// A number typed into a field but not yet stored (the field still has focus) is stored before anything else happens.
+function commitPending() { const el = document.activeElement; if (el && el.classList && el.classList.contains('stpv') && el.value !== el.dataset.raw) commitField(el); }
 function render() {
+  commitPending();
   const prevScroll = document.getElementById('scroll'), keep = prevScroll ? prevScroll.scrollTop : 0;
   const sheetEl = document.querySelector('.sh-b'), sheetKeep = sheetEl ? sheetEl.scrollTop : 0;
   const pageEl = document.querySelector('.paperscreen'), pageKeep = pageEl ? pageEl.scrollTop : 0, prevScreen = render.last;

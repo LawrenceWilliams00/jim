@@ -307,3 +307,55 @@ test.describe('on a real phone', () => {
     expect((await page.locator('#r-name').boundingBox()).height).toBeGreaterThanOrEqual(48);
   });
 });
+
+test('numbers in the editors can be typed as well as stepped', async ({ page }) => {
+  const { tap } = await open(page, { seed: backup });
+  await tap('Edit');
+  await page.getByRole('button', { name: /^Bench press/ }).click();
+  const type = async (id, text) => { await page.locator(id).click(); await page.keyboard.press('Control+A'); await page.keyboard.type(text); await page.keyboard.press('Enter'); };
+
+  await type('#v-sets', '6');
+  await expect(page.locator('#v-sets')).toHaveValue('6');
+  // Typing then going straight for + still counts both.
+  await page.locator('#v-sets').click(); await page.keyboard.press('Control+A'); await page.keyboard.type('5');
+  await tap('Sets, more');
+  await expect(page.locator('#v-sets')).toHaveValue('6');
+
+  await type('#v-hi', '8');
+  await type('#v-lo', '10'); // above the top of the range: the range moves up with it
+  await expect(page.locator('#v-hi')).toHaveValue('10');
+  await type('#v-lo', '6');
+  await type('#v-hi', '8');
+  await type('#v-rest', '150');
+  await expect(page.locator('#v-rest')).toHaveValue('2:30');
+  await type('#v-rest', '3');
+  await expect(page.locator('#v-rest')).toHaveValue('3:00');
+  await type('#v-rest', '1.45');
+  await expect(page.locator('#v-rest')).toHaveValue('1:45');
+  await type('#v-step', '1.25');
+  await expect(page.locator('#v-step')).toHaveValue('1.25 kg');
+  await tap('Goes up by, more');
+  await expect(page.locator('#v-step')).toHaveValue('2 kg');
+  await type('#v-sets', 'abc'); // nonsense is ignored
+  await expect(page.locator('#v-sets')).toHaveValue('6');
+  await type('#v-warm', '2');
+  await tap('Done');
+  await expect(page.locator('.blks')).toContainText('6 × 6–8, rest 1:45, 2 warm-ups');
+
+  // A value typed and then left with the back gesture is kept.
+  await page.getByRole('button', { name: /^Bench press/ }).click();
+  await page.locator('#v-sets').click(); await page.keyboard.press('Control+A'); await page.keyboard.type('4');
+  await page.goBack();
+  await expect(page.locator('.blks')).toContainText('4 × 6–8');
+
+  await page.getByRole('button', { name: /^Back squat/ }).click();
+  await tap('Cancel');
+  await tap('Checklist');
+  await page.keyboard.type('Bike');
+  await type('#v-timer-0', '5');
+  await expect(page.locator('#v-timer-0')).toHaveValue('5 min');
+  await type('#v-timer-0', '0');
+  await expect(page.locator('#v-timer-0')).toHaveValue('Off');
+  await type('#v-ticks-0', '3');
+  await expect(page.locator('#v-ticks-0')).toHaveValue('3');
+});
