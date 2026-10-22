@@ -1,0 +1,154 @@
+{
+ "app": "jim",
+ "version": 3,
+ "exportedAt": 1792900000000,
+ "exercises": {
+  "x-bench-press": {
+   "id": "x-bench-press",
+   "name": "Bench press",
+   "step": 2.5,
+   "notes": "",
+   "updatedAt": 1792900000000
+  },
+  "x-back-squat": {
+   "id": "x-back-squat",
+   "name": "Back squat",
+   "step": 2.5,
+   "notes": "Band on.",
+   "updatedAt": 1792900000000
+  }
+ },
+ "routines": [
+  {
+   "id": "rA",
+   "name": "Day A",
+   "order": 0,
+   "updatedAt": 1792900000000,
+   "blocks": [
+    {
+     "kind": "lift",
+     "exId": "x-bench-press",
+     "sets": 4,
+     "lo": 4,
+     "hi": 6,
+     "range": true,
+     "rest": 180,
+     "warm": 0
+    },
+    {
+     "kind": "lift",
+     "exId": "x-back-squat",
+     "sets": 3,
+     "lo": 5,
+     "hi": 8,
+     "range": true,
+     "rest": 180,
+     "warm": 0
+    }
+   ]
+  }
+ ],
+ "sessions": [
+  {
+   "id": "s1",
+   "routineId": "rA",
+   "name": "Day A",
+   "startedAt": 1792896400000,
+   "endedAt": 1792900000000,
+   "updatedAt": 1792900000000,
+   "blocks": [
+    {
+     "kind": "lift",
+     "exId": "x-bench-press",
+     "key": "x-bench-press",
+     "name": "Bench press",
+     "step": 2.5,
+     "lo": 4,
+     "hi": 6,
+     "rest": 180,
+     "sets": [
+      {
+       "kind": "work",
+       "reps": 6,
+       "kg": 60,
+       "done": true,
+       "skipped": false,
+       "touched": true,
+       "type": 0
+      },
+      {
+       "kind": "work",
+       "reps": 6,
+       "kg": 60,
+       "done": true,
+       "skipped": false,
+       "touched": true,
+       "type": 0
+      },
+      {
+       "kind": "work",
+       "reps": 6,
+       "kg": 60,
+       "done": true,
+       "skipped": false,
+       "touched": true,
+       "type": 0
+      },
+      {
+       "kind": "work",
+       "reps": 6,
+       "kg": 60,
+       "done": true,
+       "skipped": false,
+       "touched": true,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "kind": "lift",
+     "exId": "x-back-squat",
+     "key": "x-back-squat",
+     "name": "Back squat",
+     "step": 2.5,
+     "lo": 5,
+     "hi": 8,
+     "rest": 180,
+     "sets": [
+      {
+       "kind": "work",
+       "reps": 6,
+       "kg": 80,
+       "done": true,
+       "skipped": false,
+       "touched": true,
+       "type": 0
+      },
+      {
+       "kind": "work",
+       "reps": 6,
+       "kg": 80,
+       "done": true,
+       "skipped": false,
+       "touched": true,
+       "type": 0
+      },
+      {
+       "kind": "work",
+       "reps": 6,
+       "kg": 80,
+       "done": true,
+       "skipped": false,
+       "touched": true,
+       "type": 0
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "settings": {
+  "sound": true,
+  "rangeMode": true
+ }
+}

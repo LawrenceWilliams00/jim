@@ -1,0 +1,14 @@
+{
+  "name": "jim",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Jim: a simple gym tracker you can install on your phone.",
+  "type": "module",
+  "scripts": {
+    "start": "node tests/serve.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0"
+  }
+}
