@@ -239,6 +239,7 @@ function unlockAudio() { try { actx = actx || new (window.AudioContext || window
 function beep() {
   try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) { /* no vibration */ }
   if (!S.settings.sound || !actx) return;
+  try { if (actx.state !== 'running') actx.resume(); } catch (e) { /* stays asleep */ }
   try { [0, 0.22].forEach(t => { const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = 880; g.gain.setValueAtTime(0.0001, actx.currentTime + t); g.gain.exponentialRampToValueAtTime(0.25, actx.currentTime + t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + t + 0.16); o.connect(g).connect(actx.destination); o.start(actx.currentTime + t); o.stop(actx.currentTime + t + 0.18); }); } catch (e) { /* audio blocked */ }
 }
 async function keepAwake() { if (!S.cur || wake || !('wakeLock' in navigator)) return; try { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); } catch (e) { wake = null; } }
@@ -246,7 +247,11 @@ function letSleep() { try { if (wake) wake.release(); } catch (e) { /* already r
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); tick(); } });
 
 // ---------- training ----------
-function toast(text, act) { clearTimeout(toast.t); UI.toast = { text, act: act || null }; render(); toast.t = setTimeout(() => { UI.toast = null; render(); }, act ? 5000 : 3000); }
+function toast(text, act) {
+  clearTimeout(toast.t); UI.toast = { text, act: act || null }; render();
+  toast.t = setTimeout(dropToast, act ? 5000 : 3000);
+}
+function dropToast() { clearTimeout(toast.t); UI.toast = null; const el = document.querySelector('.toast'); if (el) el.remove(); }
 function edit(fn) { const c = S.cur, t = target(c); if (!t) return; const b = liftAt(c, t), x = b.sets[t.i]; fn(x, b); x.touched = true; refreshWarm(b); touchCur(); render(); }
 function needsWork() { const c = S.cur, t = target(c); if (!t || c.blocks[t.bi].kind === 'check') return false; const b = liftAt(c, t), x = b.sets[t.i]; return x.kind === 'warm' && x.kg == null; }
 function logSet() {
@@ -460,7 +465,20 @@ const A = {
   backupShare: () => { navigator.share({ files: [backupFile()], title: 'Jim backup' }).then(markBackedUp).catch(() => {}); },
   restorePick: () => { const el = document.getElementById('restore-file'); if (el) el.click(); },
 };
-$app.addEventListener('click', e => { const el = e.target.closest('[data-a]'); if (!el || !$app.contains(el) || el.disabled) return; const fn = A[el.dataset.a]; if (fn) { e.preventDefault(); fn(el.dataset); } });
+// Screens keep their main button in the same place, so the second tap of a double tap would land on the next screen's
+// (log a set, then skip the rest that follows). Taps in the first moment after the screen changes are ignored.
+const TAP_GUARD = navigator.webdriver ? 0 : 350;
+let tapGuardUntil = 0;
+$app.addEventListener('click', e => {
+  if (e.target.closest('.toast') && !e.target.closest('[data-a]')) { dropToast(); return; } // tap a toast to get rid of it
+  const el = e.target.closest('[data-a]'); if (!el || !$app.contains(el) || el.disabled) return;
+  if (performance.now() < tapGuardUntil) { e.preventDefault(); return; }
+  const fn = A[el.dataset.a]; if (!fn) return;
+  e.preventDefault();
+  if (UI.toast && !el.closest('.toast')) dropToast();
+  fn(el.dataset);
+});
+$app.addEventListener('pointerdown', () => { if (S.cur) unlockAudio(); }, { passive: true });
 $app.addEventListener('change', e => {
   if (e.target.id !== 'restore-file' || !e.target.files || !e.target.files[0]) return;
   e.target.files[0].text().then(t => {
@@ -470,7 +488,7 @@ $app.addEventListener('change', e => {
   }).catch(() => toast('That file isn’t a Jim backup.'));
 });
 $app.addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT') return;
+  if ((e.key !== 'Enter' && e.keyCode !== 13) || e.target.tagName !== 'INPUT') return;
   e.preventDefault();
   const t = e.target;
   if (t.id === 'pick-q') { const first = document.querySelector('.picklist .pickrow'); if (first && UI.sheet.q.trim()) first.click(); return; }
@@ -497,11 +515,12 @@ $app.addEventListener('input', e => {
 });
 
 // ---------- ticking ----------
+const typing = () => { const ae = document.activeElement; return !!(ae && ae.matches && ae.matches('input, textarea')); };
 function tick() {
   const c = S.cur; let changedNow = false;
-  if (c && c.rest && now() >= c.rest.endsAt) { c.over = { since: c.rest.endsAt }; c.rest = null; changedNow = true; if (UI.sheet && UI.sheet.type === 'change') UI.sheet = null; if (document.visibilityState === 'visible') beep(); UI.scrollToCard = true; }
-  if (c && c.cardio && now() >= c.cardio.endsAt) { const it = c.blocks[c.cardio.bi] && c.blocks[c.cardio.bi].items[c.cardio.it]; if (it) it.ticks = it.ticks.map(() => true); c.cardio = null; changedNow = true; beep(); }
-  if (changedNow) { touchCur(); if (UI.screen !== 'edit') render(); return; }
+  if (c && c.rest && now() >= c.rest.endsAt) { c.over = { since: c.rest.endsAt }; c.rest = null; changedNow = true; if (UI.sheet && UI.sheet.type === 'change') UI.sheet = null; if (document.visibilityState === 'visible' && now() - c.over.since < 3000) beep(); UI.scrollToCard = true; }
+  if (c && c.cardio && now() >= c.cardio.endsAt) { const it = c.blocks[c.cardio.bi] && c.blocks[c.cardio.bi].items[c.cardio.it]; if (it) it.ticks = it.ticks.map(() => true); const late = now() - c.cardio.endsAt; c.cardio = null; changedNow = true; if (late < 3000) beep(); }
+  if (changedNow) { touchCur(); if (UI.screen !== 'edit' && !typing()) render(); return; } // while typing, the next tap brings the screen up to date
   document.querySelectorAll('[data-tick]').forEach(el => {
     const k = el.dataset.tick;
     if (k === 'elapsed' && c) el.textContent = mmss(now() - c.startedAt);
@@ -851,7 +870,7 @@ function padSheet() {
   return sheetBox(title,
     '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;gap:8px"><span class="dim" style="font-weight:500">' + esc(title) + '</span><span class="dim small">' + (lw ? 'Last time ' + (isKg ? kgVal(lw.kg) : lw.reps) : '') + '</span></div>',
     '<div class="padval"><span style="color:' + (sh.buf !== '' ? 'var(--cream)' : 'var(--half)') + '">' + esc(shown) + '</span><span class="caret" aria-hidden="true"></span></div>' +
-    (sh.work ? '<p class="dim small" style="text-align:center">Warm-ups are worked out from this</p>' : '') + '<div class="chips">' + chips + '</div>' +
+    (sh.work ? '<p class="dim small padnote" style="text-align:center">Warm-ups are worked out from this</p>' : '') + '<div class="chips">' + chips + '</div>' +
     (rec.length ? '<div class="recent"><span class="dim small">' + recLabel + '</span>' + rec.map(k => '<button data-a="padSet" data-v="' + k + '">' + fmt(k) + '</button>').join('') + '</div>' : '') +
     '<div class="keys">' + ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del'].map(k => k === 'del' ? '<button data-a="key" data-k="del" aria-label="Delete">' + ICON.del + '</button>' : '<button data-a="key" data-k="' + k + '"' + (k === '.' && !isKg ? ' class="off" aria-disabled="true"' : '') + (k === '.' ? ' aria-label="Decimal point"' : '') + '>' + k + '</button>').join('') + '</div>',
     '<button class="primary" data-a="padDone">Done</button>');
@@ -893,7 +912,7 @@ function backupSheet() {
   return sheetBox('Backup', '<h2>Backup</h2><p class="dim" style="margin-top:4px">' + esc(t ? 'Last one ' + dateTxt(t) + '.' : 'No backup yet.') + ' Your workouts only live on this phone.</p>', '',
     '<button class="primary" style="margin-top:14px" data-a="backupSave">Download backup</button>' +
     (canShareFile() ? '<button class="wide" data-a="backupShare">Share backup…</button>' : '') +
-    '<button class="wide" data-a="restorePick">Restore from a file</button><input id="restore-file" class="hidden-input" type="file" accept=".json,application/json" tabindex="-1" aria-hidden="true">' +
+    '<button class="wide" data-a="restorePick">Restore from a file</button><input id="restore-file" class="hidden-input" type="file" tabindex="-1" aria-hidden="true">' +
     '<button class="wide" data-a="close">Close</button>');
 }
 function sheetHtml() {
@@ -909,7 +928,7 @@ function render() {
   const prevScroll = document.getElementById('scroll'), keep = prevScroll ? prevScroll.scrollTop : 0;
   const sheetEl = document.querySelector('.sh-b'), sheetKeep = sheetEl ? sheetEl.scrollTop : 0;
   const pageEl = document.querySelector('.paperscreen'), pageKeep = pageEl ? pageEl.scrollTop : 0, prevScreen = render.last;
-  const ae = document.activeElement, focusSel = ae && ae.matches && ae.matches('input, textarea') ? (ae.id ? '#' + ae.id : ae.dataset.ci != null ? '[data-ci="' + ae.dataset.ci + '"][data-cf="' + ae.dataset.cf + '"]' : null) : null;
+  const ae = document.activeElement, sel = ae && ae.matches && ae.matches('input, textarea') ? [ae.selectionStart, ae.selectionEnd, ae.scrollTop] : null, focusSel = ae && ae.matches && ae.matches('input, textarea') ? (ae.id ? '#' + ae.id : ae.dataset.ci != null ? '[data-ci="' + ae.dataset.ci + '"][data-cf="' + ae.dataset.cf + '"]' : null) : null;
   let html = '', cls = '';
   const c = S.cur;
   if (UI.screen === 'summary') { html = summaryScreen(); cls = 'paper'; }
@@ -924,7 +943,7 @@ function render() {
   if (sh) html += '<div class="sheetwrap"><button class="scrim" data-a="' + (UI.sheet.type === 'pick' ? 'pickCancel' : UI.screen === 'edit' ? 'cancel' : 'close') + '" aria-label="Close"></button>' + sh.replace('class="sheet', 'class="sheet' + (UI.sheet !== render.sheetObj ? ' enter' : '')) + '</div>';
   else UI.sheet = null;
   render.sheetObj = UI.sheet;
-  if (UI.toast) html += '<div class="toast" role="status"><span>' + esc(UI.toast.text) + '</span>' + (UI.toast.act ? '<button data-a="' + UI.toast.act + '">Undo</button>' : '') + '</div>';
+  if (UI.toast) html += '<div class="toast' + (UI.screen === 'train' ? ' top' : '') + '" role="status"><span>' + esc(UI.toast.text) + '</span>' + (UI.toast.act ? '<button data-a="' + UI.toast.act + '">Undo</button>' : '') + '</div>';
   $app.innerHTML = html;
   document.body.className = cls;
   if (document.querySelector('.sheet.form')) cls = 'form';
@@ -938,11 +957,19 @@ function render() {
   sheetEdges();
   render.last = UI.screen;
   syncHistory();
+  const vk = UI.screen + '|' + (UI.sheet ? UI.sheet.type + (UI.sheet.p != null ? UI.sheet.p : '') : '') + '|' + (c && c.rest ? 'rest' : '') + '|' + (c && UI.screen === 'train' ? JSON.stringify(nextOpen(c)) : '');
+  if (vk !== render.vk) { render.vk = vk; tapGuardUntil = performance.now() + TAP_GUARD; }
   let f = null;
   let focusOnPurpose = null;
   if (UI.focus) { f = focusOnPurpose = document.querySelector(UI.focus); UI.focus = null; }
   else if (focusSel) f = document.querySelector(focusSel);
-  if (f) { try { f.focus({ preventScroll: true }); const n = f.value.length; f.setSelectionRange(n, n); } catch (e) { /* not focusable */ } }
+  if (f) {
+    try {
+      f.focus({ preventScroll: true });
+      if (f !== focusOnPurpose && sel) { f.setSelectionRange(sel[0], sel[1]); f.scrollTop = sel[2]; }
+      else { const n = f.value.length; f.setSelectionRange(n, n); }
+    } catch (e) { /* not focusable */ }
+  }
   if (f && f === focusOnPurpose && f.closest('.sh-b')) {
     const add = f.closest('.item') && document.querySelector('.sh-b [data-a="addItem"]');
     if (add) add.scrollIntoView({ block: 'nearest' }); // the new item and the button to add the next one

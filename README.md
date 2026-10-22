@@ -18,7 +18,7 @@ npx playwright install chromium
 npm test
 ```
 
-The tests run on a Pixel 7 profile and at 360 px wide. They cover building a routine, training it, history shared between routines, backup and restore, and opening offline.
+The tests run on a Pixel 7 profile and at 360 px wide. They cover building a routine, training it, history shared between routines, backup and restore, opening offline, the on-screen keyboard, the back gesture, and real-phone hazards: double taps, typing being interrupted, late buzzes and short screens.
 
 ## Put it online with GitHub Pages
 

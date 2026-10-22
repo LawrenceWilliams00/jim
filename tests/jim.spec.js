@@ -229,3 +229,81 @@ test('the back gesture closes what you are in, not the app', async ({ page }) =>
   await page.goBack();
   await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
 });
+
+test.describe('on a real phone', () => {
+  test('a quick double tap does not run on into the next screen', async ({ page }) => {
+    // Automation is exempt from the tap guard; pretend to be a person.
+    await page.addInitScript(() => Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => false }));
+    const { tap } = await open(page, { seed: backup });
+    await page.waitForTimeout(400); // taps right after the app opens are ignored too
+    await tap('Start');
+    await page.waitForTimeout(400);
+    await page.getByRole('button', { name: 'Log set 1' }).dblclick();
+    await expect(page.getByRole('button', { name: 'Skip rest' }), 'the second tap must not skip the rest').toBeVisible();
+    await page.waitForTimeout(400);
+    await page.getByRole('button', { name: 'Skip rest' }).dblclick();
+    await expect(page.getByRole('button', { name: 'Log set 2' }), 'the second tap must not log set 2').toBeVisible();
+  });
+
+  test('typing is not disturbed by a toast or the rest timer', async ({ page }) => {
+    const { tap } = await open(page, { seed: backup });
+    await tap('Edit');
+    await tap('Duplicate'); // shows a toast and puts you in the name field
+    await page.keyboard.type(' x');
+    await page.locator('#r-name').evaluate(el => el.setSelectionRange(3, 3));
+    await page.clock.fastForward(4000); // the toast goes away
+    expect(await page.locator('#r-name').evaluate(el => [document.activeElement === el, el.selectionStart])).toEqual([true, 3]);
+
+    await tap('Today');
+    await tap('Start');
+    await tap('Log set 1');
+    await page.getByRole('button', { name: /^Bench press/ }).click();
+    await page.locator('#notes').fill('Grip wider');
+    await page.locator('#notes').evaluate(el => el.setSelectionRange(4, 4));
+    await page.clock.fastForward(181_000); // rest runs out while typing
+    expect(await page.locator('#notes').evaluate(el => [document.activeElement === el, el.selectionStart])).toEqual([true, 4]);
+  });
+
+  test('no late beep when you come back after the rest ended', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__buzz = 0; navigator.vibrate = () => { window.__buzz++; return true; };
+      let state = 'visible';
+      Object.defineProperty(document, 'visibilityState', { get: () => state, configurable: true });
+      window.__setVisible = v => { state = v ? 'visible' : 'hidden'; document.dispatchEvent(new Event('visibilitychange')); };
+    });
+    const { tap } = await open(page, { seed: backup });
+    await tap('Start');
+    await tap('Log set 1');
+    await page.evaluate(() => window.__setVisible(false));
+    // The phone sleeps: no timers run, the clock moves on 4 minutes.
+    await page.clock.setSystemTime(new Date('2026-10-28T08:04:00'));
+    await page.evaluate(() => window.__setVisible(true));
+    await expect(page.locator('.over')).toBeVisible();
+    expect(await page.evaluate(() => window.__buzz)).toBe(0);
+  });
+
+  test('the screen never shifts under a focused field', async ({ page }) => {
+    await page.addInitScript(() => {
+      let kb = 0; const vv = new EventTarget();
+      Object.defineProperties(vv, { height: { get: () => document.documentElement.clientHeight - kb }, width: { get: () => innerWidth }, offsetTop: { get: () => 0 } });
+      Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+      window.__keyboard = h => { kb = h; vv.dispatchEvent(new Event('resize')); };
+    });
+    const { tap } = await open(page, { seed: backup });
+    await tap('Edit');
+    await tap('Checklist');
+    for (const item of ['Bike', 'Rows', 'Dislocates', 'Push-ups']) { await page.keyboard.type(item); await page.keyboard.press('Enter'); await page.keyboard.press('Enter'); }
+    await page.evaluate(() => window.__keyboard(340));
+    await page.locator('[data-ci="3"][data-cf="detail"]').focus();
+    await page.evaluate(() => document.activeElement.scrollIntoView());
+    expect(await page.evaluate(() => [document.getElementById('app').scrollTop, document.querySelector('.sheet').scrollTop])).toEqual([0, 0]);
+  });
+
+  test('editor fields keep their size on a short screen', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 560 });
+    const { tap } = await open(page, { seed: backup });
+    await tap('Edit');
+    for (let i = 0; i < 6; i++) { await tap('Checklist'); await tap('Done'); }
+    expect((await page.locator('#r-name').boundingBox()).height).toBeGreaterThanOrEqual(48);
+  });
+});

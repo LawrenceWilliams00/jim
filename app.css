@@ -16,7 +16,7 @@
 @media (min-width: 375px) { :root { --gut: 24px; } }
 html { box-sizing: border-box; }
 html, body { height: 100%; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: manipulation; }
 body { margin: 0; background: var(--forest); color: var(--cream); font-family: var(--font); font-size: 15px; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
 body.paper { background: var(--paper); }
 body.resting { background: var(--rest); }
@@ -28,7 +28,11 @@ h1, h2 { text-wrap: balance; }
 svg { flex: none; }
 .dim { color: var(--cream-2); }
 .small { font-size: 13px; }
-.app { position: relative; height: 100%; height: 100dvh; max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; }
+.app { position: relative; height: 100%; height: 100dvh; max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.app input, .app textarea { -webkit-user-select: text; user-select: text; }
+/* Pressed feedback: without it a tap feels like it didn't land. */
+button:active:not(:disabled) { opacity: 0.7; }
+.paperscreen > * { flex-shrink: 0; } /* scrolling pages scroll; they don't squash what's in them */
 .screen { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-left: max(var(--gut), env(safe-area-inset-left, 0px)); padding-right: max(var(--gut), env(safe-area-inset-right, 0px)); padding-block: 8px calc(12px + env(safe-area-inset-bottom, 0px)); }
 
 /* top bar + pips */
@@ -114,10 +118,12 @@ svg { flex: none; }
 .link i { width: 2px; height: 100%; background: var(--line); }
 
 /* rest */
-.ringwrap { flex: none; position: relative; width: min(300px, 76vw); aspect-ratio: 1; max-width: 100%; margin: 0 auto; }
+/* The ring gives way on short screens so Skip rest never drops off the bottom; the digits scale with it. */
+.ringwrap { flex: none; position: relative; width: clamp(140px, calc(var(--vvh, 100dvh) - 400px), min(300px, 76vw)); aspect-ratio: 1; margin: 0 auto; container-type: inline-size; }
 .ringwrap svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .ringtxt { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.big { font-size: clamp(72px, 26vw, 104px); font-weight: 700; line-height: 1; letter-spacing: -4px; }
+.big { font-size: 34cqw; font-weight: 700; line-height: 1; letter-spacing: -0.04em; }
+.ringtxt .tot { font-size: clamp(13px, 5.6cqw, 17px) !important; }
 .adjust { flex: none; display: flex; justify-content: center; gap: 56px; padding-top: 8px; }
 .adjust button { height: 44px; padding: 0 12px; font-size: 17px; font-weight: 500; color: var(--cream-2); }
 .lines { flex: none; border-top: 1px solid var(--line-rest); border-bottom: 1px solid var(--line-rest); }
@@ -216,6 +222,18 @@ svg { flex: none; }
 .keys { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .keys button { height: 52px; border-radius: 14px; background: var(--forest); font-size: 24px; font-weight: 500; display: flex; align-items: center; justify-content: center; }
 .keys button.off { color: var(--skip); }
+/* Short phones: the whole keypad has to fit without scrolling. */
+@media (max-height: 700px) {
+  .padval { margin-top: 0; }
+  .padval span:first-child { font-size: 46px; }
+  .caret { height: 38px; }
+  .padnote { display: none; }
+  .chips { margin-top: 6px; }
+  .recent { margin-top: 6px; }
+  .keys { margin-top: 8px; gap: 6px; }
+  .keys button { height: 46px; font-size: 22px; }
+  .sh-f .primary { height: 52px; }
+}
 textarea, .sin { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 12px; border-radius: 14px; border: 0; background: var(--forest); color: var(--cream); font: inherit; font-size: 16px; line-height: 1.4; }
 textarea { min-height: 96px; resize: vertical; }
 .sin { height: 48px; padding: 0 12px; }
@@ -226,7 +244,7 @@ textarea { min-height: 96px; resize: vertical; }
 .stp .ctl { display: flex; align-items: center; gap: 4px; }
 .stp .ctl b { min-width: 64px; text-align: center; font-size: 20px; }
 .seg2 { display: inline-flex; gap: 4px; padding: 4px; border-radius: 14px; background: var(--forest); }
-.seg2 button { height: 40px; min-width: 64px; padding: 0 12px; border-radius: 10px; font-size: 15px; font-weight: 600; color: var(--cream-2); text-align: center; }
+.seg2 button { height: 44px; min-width: 64px; padding: 0 12px; border-radius: 10px; font-size: 15px; font-weight: 600; color: var(--cream-2); text-align: center; }
 .seg2 button.on { background: var(--cream); color: var(--forest); }
 .namerow { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
 #pick-q { margin: 4px 0 8px; }
@@ -248,6 +266,8 @@ textarea { min-height: 96px; resize: vertical; }
 .danger { color: var(--red); }
 
 .toast { position: absolute; left: max(var(--gut), env(safe-area-inset-left, 0px)); right: max(var(--gut), env(safe-area-inset-right, 0px)); bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 16px; min-height: 44px; border-radius: 14px; background: var(--cream); color: var(--forest); font-size: 15px; font-weight: 500; line-height: 1.35; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+/* During a workout the bottom of the screen is all controls, so toasts sit under the progress bar instead. */
+.toast.top { top: calc(70px + env(safe-area-inset-top, 0px)); bottom: auto; }
 .toast span { flex: 1; padding: 6px 0; }
 .toast button { flex: none; height: 44px; padding: 0 12px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 @media (prefers-reduced-motion: no-preference) { .sheet.enter { animation: up 0.18s ease-out; } @keyframes up { from { transform: translateY(24px); opacity: 0.6; } } }
