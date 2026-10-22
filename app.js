@@ -468,10 +468,16 @@ $app.addEventListener('change', e => {
     toast(got.length ? 'Restored ' + got.join(' and ') + '.' : 'Nothing new in that backup.');
   }).catch(() => toast('That file isn’t a Jim backup.'));
 });
+$app.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT') return;
+  e.preventDefault();
+  if (e.target.id === 'pick-q') { const first = document.querySelector('.picklist .pickrow'); if (first && UI.sheet.q.trim()) first.click(); return; }
+  e.target.blur();
+});
 $app.addEventListener('input', e => {
   const el = e.target;
   if (el.id === 'notes') { const ex = exById(el.dataset.ex); if (ex) { ex.notes = el.value; saveEx(ex); } return; }
-  if (el.id === 'pick-q') { UI.sheet.q = el.value; render(); return; }
+  if (el.id === 'pick-q') { UI.sheet.q = el.value; const pl = document.querySelector('.picklist'); if (pl) pl.innerHTML = pickListHtml(); return; }
   const r = curRoutine(); if (!r) return;
   if (el.dataset.rf === 'name') { r.name = el.value; saveRoutine(r); return; }
   if (el.dataset.f === 'exname') { const t = sheetSlot(), ex = t && exById(t.exId); if (ex) { ex.name = el.value; saveEx(ex); } return; }
@@ -503,6 +509,19 @@ function paintRest(root, r) {
   if (tot) tot.textContent = 'left of ' + secTxt(r.total);
 }
 setInterval(tick, 250);
+
+// ---------- on-screen keyboard ----------
+// Chrome on Android shrinks the page when the keyboard opens (interactive-widget=resizes-content in index.html).
+// Where a browser only shrinks the visible area instead, this lifts sheets above the keyboard and keeps the focused field in view.
+const vv = window.visualViewport;
+function fitKeyboard() {
+  const root = document.documentElement, kb = Math.max(0, Math.round(root.clientHeight - vv.height - vv.offsetTop));
+  root.style.setProperty('--kb', kb + 'px');
+  root.style.setProperty('--vvh', Math.round(vv.height) + 'px');
+  const ae = document.activeElement;
+  if (ae && ae.matches('input, textarea') && ae.closest('.sheet')) ae.scrollIntoView({ block: 'nearest' });
+}
+if (vv) { vv.addEventListener('resize', fitKeyboard); vv.addEventListener('scroll', fitKeyboard); fitKeyboard(); }
 
 // ---------- training screens ----------
 function pipsHtml(c, resting) {
@@ -675,7 +694,7 @@ function editScreen() {
   }).join('');
   return '<div class="screen paperscreen">' +
     '<div class="etop"><button data-a="editDone">' + ICON.back + 'Today</button><button data-a="editDone">Done</button></div>' +
-    '<input id="r-name" class="pin" data-rf="name" value="' + esc(r.name) + '" placeholder="Routine name" aria-label="Routine name" autocomplete="off">' +
+    '<input id="r-name" class="pin" autocapitalize="sentences" enterkeyhint="done" data-rf="name" value="' + esc(r.name) + '" placeholder="Routine name" aria-label="Routine name" autocomplete="off">' +
     (rows ? '<div class="blks">' + rows + '</div>' : '') +
     '<div class="adds"><button data-a="addExercise">' + ICON.plus + 'Exercise</button><button data-a="addSuperset">' + ICON.plus + 'Superset</button><button data-a="addChecklist">' + ICON.plus + 'Checklist</button></div>' +
     (rs.length > 1 ? '<div class="rowbtns"><button data-a="moveRoutine" data-d="-1"' + (pos === 0 ? ' disabled' : '') + '>Move up</button><button data-a="moveRoutine" data-d="1"' + (pos === rs.length - 1 ? ' disabled' : '') + '>Move down</button></div>' : '') +
@@ -716,16 +735,20 @@ function moveRow(count, idx, canRemove) {
 }
 const footBtns = '<div class="sheetfoot"><button class="cancel" data-a="cancel">Cancel</button><button class="primary" data-a="done">Done</button></div>';
 function pickSheet() {
-  const sh = UI.sheet, q = sh.q || '', nq = norm(q);
+  const sh = UI.sheet, q = sh.q || '';
+  const title = sh.mode === 'swap' ? 'Change exercise' : sh.mode === 'part' ? 'Add to superset' : 'Add exercise';
+  return '<div class="sheet" role="dialog" aria-label="' + title + '"><div class="grab"></div><h2>' + title + '</h2>' +
+    '<input id="pick-q" class="sin" value="' + esc(q) + '" placeholder="Search or type a new name" aria-label="Search exercises" autocomplete="off" autocapitalize="sentences" enterkeyhint="go">' +
+    '<div class="picklist">' + pickListHtml() + '</div>' +
+    '<button class="wide" data-a="pickCancel">Cancel</button></div>';
+}
+function pickListHtml() {
+  const q = UI.sheet.q || '', nq = norm(q);
   const all = Object.values(S.exercises).filter(x => x.name).sort((a, b) => a.name.localeCompare(b.name));
   const list = nq ? all.filter(x => norm(x.name).includes(nq)) : all;
   const exact = nq && all.some(x => norm(x.name) === nq);
-  const title = sh.mode === 'swap' ? 'Change exercise' : sh.mode === 'part' ? 'Add to superset' : 'Add exercise';
-  return '<div class="sheet" role="dialog" aria-label="' + title + '"><div class="grab"></div><h2>' + title + '</h2>' +
-    '<input id="pick-q" class="sin" value="' + esc(q) + '" placeholder="Search or type a new name" aria-label="Search exercises" autocomplete="off">' +
-    '<div class="picklist">' + list.map(x => '<button class="pickrow" data-a="pickEx" data-id="' + esc(x.id) + '"><span style="flex:1;min-width:0">' + esc(x.name) + '</span>' + ICON.chev + '</button>').join('') +
-    (nq && !exact ? '<button class="pickrow new" data-a="pickEx">' + ICON.plus + 'New: ' + esc(q.trim()) + '</button>' : '') + '</div>' +
-    '<button class="wide" data-a="pickCancel">Cancel</button></div>';
+  return list.map(x => '<button class="pickrow" data-a="pickEx" data-id="' + esc(x.id) + '"><span style="flex:1;min-width:0">' + esc(x.name) + '</span>' + ICON.chev + '</button>').join('') +
+    (nq && !exact ? '<button class="pickrow new" data-a="pickEx">' + ICON.plus + 'New: ' + esc(q.trim()) + '</button>' : '');
 }
 function slotSheet() {
   const sh = UI.sheet, bl = sheetBlock(), t = sheetSlot(); if (!t) return '';
@@ -735,7 +758,7 @@ function slotSheet() {
   const reps = t.range ? stp('Low', 'lo', t.lo) + stp('High', 'hi', Math.max(t.lo, t.hi || t.lo)) : stp('Reps', 'lo', t.lo);
   return '<div class="sheet" role="dialog" aria-label="' + esc(ex.name) + '"><div class="grab"></div>' +
     (isPart ? '<button class="txtbtn" style="margin:6px -12px 0;display:flex;align-items:center" data-a="done">' + ICON.back + 'Superset</button>' : '') +
-    '<div class="namerow"><input id="e-name" class="sin lg" data-f="exname" value="' + esc(ex.name) + '" aria-label="Exercise name" autocomplete="off"><button data-a="swapEx">Change</button></div>' +
+    '<div class="namerow"><input id="e-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" data-f="exname" value="' + esc(ex.name) + '" aria-label="Exercise name" autocomplete="off"><button data-a="swapEx">Change</button></div>' +
     (used.length ? '<p class="dim small" style="margin-top:6px">Also in ' + esc(used.join(', ')) + '</p>' : '') +
     '<div style="margin-top:12px">' + stp('Sets', 'sets', t.sets || 3) +
     '<div class="stp"><span>Reps</span><div class="seg2" role="group" aria-label="Fixed reps or a range"><button class="' + (t.range ? '' : 'on') + '" data-a="repMode" data-v="single" aria-pressed="' + !t.range + '">Fixed</button><button class="' + (t.range ? 'on' : '') + '" data-a="repMode" data-v="range" aria-pressed="' + !!t.range + '">Range</button></div></div>' + reps +
@@ -751,11 +774,11 @@ function ssSheet() {
 }
 function checkSheet() {
   const sh = UI.sheet, bl = sheetBlock(), r = curRoutine(); if (!bl) return '';
-  const items = bl.items.map((it, i) => '<div class="item"><div class="two"><input class="sin" data-ci="' + i + '" data-cf="text" value="' + esc(it.text) + '" placeholder="Item" aria-label="Item ' + (i + 1) + '" style="flex:1.4;min-width:0"><input class="sin" data-ci="' + i + '" data-cf="detail" value="' + esc(it.detail) + '" placeholder="2 × 15" aria-label="Item ' + (i + 1) + ' detail" style="flex:1;min-width:0"><button class="xbtn" data-a="delItem" data-i="' + i + '" aria-label="Remove item ' + (i + 1) + '">' + ICON.x + '</button></div>' +
+  const items = bl.items.map((it, i) => '<div class="item"><div class="two"><input class="sin" autocapitalize="sentences" enterkeyhint="done" data-ci="' + i + '" data-cf="text" value="' + esc(it.text) + '" placeholder="Item" aria-label="Item ' + (i + 1) + '" style="flex:1.4;min-width:0"><input class="sin" autocapitalize="sentences" enterkeyhint="done" data-ci="' + i + '" data-cf="detail" value="' + esc(it.detail) + '" placeholder="2 × 15" aria-label="Item ' + (i + 1) + ' detail" style="flex:1;min-width:0"><button class="xbtn" data-a="delItem" data-i="' + i + '" aria-label="Remove item ' + (i + 1) + '">' + ICON.x + '</button></div>' +
     stp('Ticks', 'ticks', it.ticks || 1, 'item', ' data-i="' + i + '"').replace(/aria-label="Ticks, (less|more)"/g, (m, w) => 'aria-label="Ticks for item ' + (i + 1) + ', ' + w + '"') +
     stp('Timer', 'timer', it.timer ? it.timer + ' min' : 'Off', 'item', ' data-i="' + i + '"').replace(/aria-label="Timer, (less|more)"/g, (m, w) => 'aria-label="Timer for item ' + (i + 1) + ', ' + w + '"') + '</div>').join('');
   return '<div class="sheet" role="dialog" aria-label="Checklist"><div class="grab"></div>' +
-    '<input id="c-name" class="sin lg" style="margin-top:14px" data-f="cname" value="' + esc(bl.name) + '" placeholder="Checklist name" aria-label="Checklist name">' +
+    '<input id="c-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" style="margin-top:14px" data-f="cname" value="' + esc(bl.name) + '" placeholder="Checklist name" aria-label="Checklist name">' +
     '<div style="margin-top:10px">' + items + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addItem">' + ICON.plus + ' Add an item</button>' + moveRow(r.blocks.length, sh.bi, !sh.isNew) + footBtns + '</div>';
 }
 function padSheet() {
@@ -867,5 +890,15 @@ settleStale();
 render();
 if (S.cur && UI.screen === 'train') keepAwake();
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* not supported */ }
-if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('./sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  const hadWorker = !!navigator.serviceWorker.controller;
+  let updateReady = false;
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  // A new version has taken over. Reload now if nothing's in progress, otherwise when the app is next put away.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadWorker) return;
+    if (UI.screen === 'today' && !UI.sheet && !S.cur) location.reload(); else updateReady = true;
+  });
+  document.addEventListener('visibilitychange', () => { if (updateReady && document.visibilityState === 'hidden') location.reload(); });
+}
 })();

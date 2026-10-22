@@ -1,7 +1,8 @@
 // Offline support. Every file is served from the cache straight away (so the app opens with no signal),
 // and refreshed from the network in the background, so a new deploy shows up on the next open.
-// Bump VERSION when you add, rename or remove a file in FILES.
-const VERSION = 'jim-1';
+// Bump VERSION on every deploy: the app sees the new worker, fetches fresh files and reloads itself
+// (straight away on the Today screen, otherwise the next time it's put in the background).
+const VERSION = 'jim-2';
 const FILES = [
   './',
   './index.html',
@@ -19,7 +20,7 @@ const FILES = [
 ];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(VERSION).then(cache => cache.addAll(FILES)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(VERSION).then(cache => cache.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', event => {

@@ -187,9 +187,10 @@ svg { flex: none; }
 .rowbtns button.danger { color: var(--red-ink); }
 
 /* sheets */
-.sheetwrap { position: absolute; inset: 0; z-index: 20; }
+/* --kb is the part of the screen the on-screen keyboard covers, --vvh what is left; both set from app.js */
+.sheetwrap { position: absolute; inset: 0 0 var(--kb, 0px) 0; z-index: 20; }
 .scrim { position: absolute; inset: 0; background: var(--scrim); width: 100%; }
-.sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 92%; overflow-y: auto; background: var(--raised); color: var(--cream); border-radius: 24px 24px 0 0; padding: 10px max(var(--gut), env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) max(var(--gut), env(safe-area-inset-left, 0px)); }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; max-height: min(92%, calc(var(--vvh, 100dvh) - 16px)); overflow-y: auto; overscroll-behavior: contain; background: var(--raised); color: var(--cream); border-radius: 24px 24px 0 0; padding: 10px max(var(--gut), env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) max(var(--gut), env(safe-area-inset-left, 0px)); }
 .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto; }
 .sheet h2 { font-size: 24px; font-weight: 700; margin-top: 14px; }
 .sheet .primary { width: 100%; margin-top: 14px; }

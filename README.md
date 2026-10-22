@@ -38,7 +38,7 @@ Open that URL in Chrome, then go to **⋮ → Install app** (on some versions it
 
 ## Updating
 
-Push to `main`. The app opens its cached copy instantly and fetches new files in the background, so changes show up the next time you open it. If you add, rename or remove a file, update `FILES` in `sw.js` and bump `VERSION`.
+Bump `VERSION` in `sw.js`, then push to `main`. The next time the app opens, it picks up the new version and reloads itself: straight away if you're on Today, otherwise the next time it goes into the background, so a workout is never interrupted. If you forget to bump it, the change still arrives, just one open later. If you add, rename or remove a file, update `FILES` too.
 
 ## How it's put together
 
@@ -54,5 +54,6 @@ Push to `main`. The app opens its cached copy instantly and fetches new files in
 
 ## Known limits
 
+- The on-screen keyboard: `interactive-widget=resizes-content` in `index.html` makes Chrome shrink the page instead of covering it. Where a browser only shrinks the visible area, `fitKeyboard()` in `app.js` lifts the sheets instead.
 - You won't get an alert when rest ends while the screen is off or you're in another app. During a workout the app keeps the screen awake, so it beeps and buzzes as long as it's open. Lock-screen alerts need a native wrapper, such as Capacitor with its Local Notifications plugin, which is straightforward on Android.
 - `localStorage` holds about 5 MB, which is a few years of workouts. If history outgrows that, move sessions to IndexedDB.

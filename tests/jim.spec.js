@@ -147,3 +147,52 @@ test('opens with no connection after the first visit', async ({ page, context })
   await expect.poll(() => page.evaluate(() => document.fonts.check('700 16px "Bricolage Grotesque"'))).toBe(true);
   await context.setOffline(false);
 });
+
+test.describe('with the on-screen keyboard open', () => {
+  test('sheets sit above it when the page shrinks (Chrome on Android)', async ({ page }) => {
+    const { tap } = await open(page, { seed: backup });
+    await page.getByRole('button', { name: 'Edit' }).click();
+    await tap('Exercise');
+    const field = await page.evaluateHandle(() => document.getElementById('pick-q'));
+    const { width } = page.viewportSize();
+    await page.setViewportSize({ width, height: 420 }); // what's left above a typical keyboard
+    await page.keyboard.type('Bench');
+    expect(await page.evaluate(f => f === document.getElementById('pick-q'), field), 'typing never rebuilds the field').toBe(true);
+    await expect(page.locator('#pick-q')).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('.sheet .pickrow', { hasText: 'Bench press' })).toBeInViewport({ ratio: 1 });
+    expect((await page.locator('.sheet').boundingBox()).y).toBeGreaterThanOrEqual(0);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#e-name')).toHaveValue('Bench press');
+  });
+
+  test('sheets are lifted when only the visible area shrinks', async ({ page }) => {
+    await page.addInitScript(() => {
+      let kb = 0;
+      const vv = new EventTarget();
+      Object.defineProperties(vv, {
+        height: { get: () => document.documentElement.clientHeight - kb },
+        width: { get: () => innerWidth },
+        offsetTop: { get: () => 0 },
+      });
+      Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+      window.__keyboard = h => { kb = h; vv.dispatchEvent(new Event('resize')); };
+    });
+    const { tap } = await open(page, { seed: backup });
+    await page.getByRole('button', { name: 'Edit' }).click();
+    await tap('Checklist');
+    for (const item of ['Bike', 'Band pull-aparts', 'Dislocates']) { await page.keyboard.type(item); await tap('Add an item'); }
+    await page.keyboard.type('Push-ups');
+    await page.locator('[data-ci="3"][data-cf="text"]').focus();
+    const kb = 340;
+    await page.evaluate(h => window.__keyboard(h), kb);
+    const visibleBottom = (await page.evaluate(() => document.documentElement.clientHeight)) - kb;
+    const sheet = await page.locator('.sheet').boundingBox();
+    expect(sheet.y + sheet.height).toBeLessThanOrEqual(visibleBottom + 1);
+    expect(sheet.y).toBeGreaterThanOrEqual(0);
+    const item = await page.locator('[data-ci="3"][data-cf="text"]').boundingBox();
+    expect(item.y).toBeGreaterThanOrEqual(sheet.y);
+    expect(item.y + item.height).toBeLessThanOrEqual(visibleBottom + 1);
+    await page.evaluate(() => window.__keyboard(0));
+    await tap('Cancel');
+  });
+});
