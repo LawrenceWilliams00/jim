@@ -79,7 +79,7 @@ function migrate() {
   S.sessions.forEach(s => { if (lifts(s)) dirtyS.add(s); }); if (S.cur) lifts(S.cur);
   if (S.notes) { Object.entries(S.notes).forEach(([k, v]) => { const ex = findByName(k); if (ex && v && !ex.notes) { ex.notes = v; dirtyX.add(ex.id); } }); delete S.notes; }
   let settings = false; if (S.settings.rest) { delete S.settings.rest; settings = true; }
-  if (S.settings.ui) { delete S.settings.ui; settings = true; } // left over from trying typing layouts
+  ['ui', 'look'].forEach(k => { if (S.settings[k]) { delete S.settings[k]; settings = true; } }); // left over from trying layouts
   Object.keys(S.exercises).forEach(id => { if (!before.has(id)) dirtyX.add(id); });
   return { routines: [...dirtyR], exercises: [...dirtyX], sessions: [...dirtyS], settings };
 }
@@ -446,7 +446,6 @@ const A = {
   planSkip: d => { const c = S.cur, b = c.blocks[+d.bi]; if (b.kind === 'check') b.skipped = true; else blockSets(b).forEach(x => { if (isOpen(x)) x.skipped = true; }); c.pick = null; c.fix = null; if (c.cardio && c.cardio.bi === +d.bi) c.cardio = null; touchCur(); if (!nextOpen(c)) { UI.sheet = null; finish(); return; } render(); },
   planBack: d => { const b = S.cur.blocks[+d.bi]; if (b.kind === 'check') b.skipped = false; else blockSets(b).forEach(x => { if (x.skipped) x.skipped = false; }); touchCur(); render(); },
   showWarm: () => { UI.showWarm = true; render(); },
-  look: d => { S.settings.look = d.v; saveSettings(); render(); },
   later: () => { const c = S.cur, t = nextOpen(c); if (!t || t.bi === c.blocks.length - 1) { UI.sheet = null; toast('This is already the last one.'); return; } const [b] = c.blocks.splice(t.bi, 1); c.blocks.push(b); c.pick = null; c.fix = null; UI.sheet = null; touchCur(); toast(blockTitle(b) + ' moved to the end.'); },
   pick: d => { S.cur.pick = { bi: +d.bi, p: +d.p }; touchCur(); render(); },
   // rest
@@ -634,11 +633,11 @@ function topHtml(c, resting) {
     '<button class="txtbtn" data-a="askFinish">Finish</button></div>' + pipsHtml(c, resting);
 }
 const overHtml = c => (c.over ? '<div class="over" role="status"><span>' + ICON.timer + 'Rest is up, you’re on</span><span data-tick="over">' + mmss(now() - c.over.since) + ' over</span></div>' : '');
-function stepsHtml(b, x, light) {
+function stepsHtml(b, x) {
   const v = kgVal(x.kg), cls = v.length >= 5 ? ' s' : v.length >= 4 ? ' m' : '';
   const c1 = x.kind === 'warm' ? (x.frac === 'easy' ? 'easy reps' : Math.round(x.frac * 100) + '% of ' + (workKg(b) == null ? 'working' : kgVal(workKg(b)) + unit(workKg(b)))) : 'reps, aim ' + range(b.lo, b.hi);
   const c2 = x.kg == null ? (x.kind === 'warm' ? 'set working weight' : 'set a weight') : x.kg === 0 ? 'bodyweight' : 'kg';
-  return '<div class="steps' + (light ? ' light' : '') + '"><button class="sq" data-a="repsDn" aria-label="One fewer rep">' + ICON.minus + '</button>' +
+  return '<div class="steps"><button class="sq" data-a="repsDn" aria-label="One fewer rep">' + ICON.minus + '</button>' +
     '<button class="val" data-a="padReps" aria-label="Reps: ' + x.reps + ', tap to type">' + x.reps + '</button>' +
     '<button class="sq" data-a="repsUp" aria-label="One more rep">' + ICON.plus + '</button><span class="times" aria-hidden="true">×</span>' +
     '<button class="sq" data-a="kgDn" aria-label="Less weight">' + ICON.minus + '</button>' +
@@ -651,7 +650,7 @@ function lastTxt(b, x, wi) {
   const last = lastFor(b.exId, b.lo, b.hi), lw = last && last.all.filter(y => y.done)[wi];
   return lw ? 'last ' + setTxt(lw) : 'no last time';
 }
-// ---------- the lift screen, in three looks while choosing (Today → Workout screen) ----------
+// ---------- the lift screen ----------
 function lastSet(b, wi) { const last = lastFor(b.exId, b.lo, b.hi); return last ? last.all.filter(y => y.done)[wi] || null : null; }
 function setLabel(b, i) { const x = b.sets[i], n = b.sets.slice(0, i + 1).filter(y => y.kind === x.kind).length; return (x.kind === 'warm' ? 'Warm-up ' : 'Set ') + n; }
 // Set label; on working sets it's also the button for the set type (Working / Drop set / To failure).
@@ -690,33 +689,21 @@ function liftActions(c, b, t) {
   const label = c.fix ? 'Save' : tx.kg == null ? 'Set a weight' : 'Log ' + (tx.kind === 'warm' ? 'warm-up ' : 'set ') + b.sets.slice(0, t.i + 1).filter(y => y.kind === tx.kind).length;
   return '<div class="actions">' + (c.fix ? '' : '<button class="skip" data-a="skip">Skip</button>') + '<button class="primary" data-a="log">' + label + '</button></div>';
 }
+// The set you're on: big numbers you can tap to type, with − and + under each.
+function bigSet(b, x) {
+  const v = kgVal(x.kg), size = v.length >= 5 ? ' s' : v.length >= 4 ? ' m' : '';
+  const cap1 = x.kind === 'warm' ? (x.frac === 'easy' ? 'easy reps' : Math.round(x.frac * 100) + '% of ' + (workKg(b) == null ? 'working' : kgVal(workKg(b)) + unit(workKg(b)))) : 'reps · aim ' + range(b.lo, b.hi);
+  const cap2 = x.kg == null ? (x.kind === 'warm' ? 'set working weight' : 'set a weight') : x.kg === 0 ? 'bodyweight' : 'kg';
+  const col = (val, cls, pad, dn, up, cap, name, less, more) => '<div class="fcol"><button class="fval' + cls + '" data-a="' + pad + '" aria-label="' + name + ': ' + esc(val) + ', tap to type">' + esc(val) + '</button>' +
+    '<div class="fpm"><button data-a="' + dn + '" aria-label="' + less + '">' + ICON.minus + '</button><button data-a="' + up + '" aria-label="' + more + '">' + ICON.plus + '</button></div><span class="fcap">' + esc(cap) + '</span></div>';
+  return '<div class="fnums">' + col(String(x.reps), '', 'padReps', 'repsDn', 'repsUp', cap1, 'Reps', 'One fewer rep', 'One more rep') + '<span class="fx" aria-hidden="true">×</span>' +
+    col(v, size + (x.kg == null ? ' unset' : ''), 'padKg', 'kgDn', 'kgUp', cap2, 'Weight', 'Less weight', 'More weight') + '</div>';
+}
 function liftScreen(c, t) {
-  const b = liftAt(c, t), i = c.fix ? c.fix.i : t.i, x = b.sets[i], look = S.settings.look || 'a';
-  const add = '<button class="addbtn" data-a="add">' + ICON.plus + 'Add a set</button>';
-  const top = topHtml(c) + overHtml(c) + liftHead(c, t, b);
-  if (look === 'b') {
-    // One set at a time: the sets are a row of dots, and the set you're on gets the whole middle of the screen.
-    const dots = b.sets.map((y, k) => {
-      const cur = k === i, n = b.sets.slice(0, k + 1).filter(z => z.kind === y.kind).length, txt = y.done ? ICON.check : y.kind === 'warm' ? 'W' : String(n);
-      const cls = 'sdot' + (y.done ? ' on' : '') + (cur ? ' cur' : '') + (y.skipped ? ' sk' : '') + (y.kind === 'warm' ? ' w' : '');
-      return (y.done || y.skipped) && !cur ? '<button class="' + cls + '" data-a="row" data-bi="' + t.bi + '" data-i="' + k + '" aria-label="' + setLabel(b, k) + (y.done ? ', ' + esc(setTxt(y)) + '. Tap to fix' : ' skipped. Tap to do it') + '"><i>' + txt + '</i></button>' : '<span class="' + cls + '" aria-hidden="true"><i>' + txt + '</i></span>';
-    }).join('');
-    const v = kgVal(x.kg), big = v.length >= 5 ? ' s' : v.length >= 4 ? ' m' : '';
-    const cap1 = x.kind === 'warm' ? (x.frac === 'easy' ? 'easy reps' : Math.round(x.frac * 100) + '% of working') : 'reps · aim ' + range(b.lo, b.hi);
-    const cap2 = x.kg == null ? 'set a weight' : x.kg === 0 ? 'bodyweight' : 'kg', last = lastLine(b, x, i);
-    const col = (val, cls, pad, dn, up, cap, name) => '<div class="fcol"><button class="fval' + cls + '" data-a="' + pad + '" aria-label="' + name + ': ' + esc(val) + ', tap to type">' + esc(val) + '</button><div class="fpm"><button data-a="' + dn + '" aria-label="' + (name === 'Reps' ? 'One fewer rep' : 'Less weight') + '">' + ICON.minus + '</button><button data-a="' + up + '" aria-label="' + (name === 'Reps' ? 'One more rep' : 'More weight') + '">' + ICON.plus + '</button></div><span class="fcap">' + esc(cap) + '</span></div>';
-    return top + '<div class="sdots">' + dots + '<button class="sdot addone" data-a="add" aria-label="Add a set"><i>' + ICON.plus + '</i></button></div>' +
-      '<div class="grow"></div><div class="focus" id="card"><div class="flab">' + cardLab(b, x, i, !!c.fix) + '</div>' +
-      '<div class="fnums">' + col(String(x.reps), '', 'padReps', 'repsDn', 'repsUp', cap1, 'Reps') + '<span class="fx" aria-hidden="true">×</span>' + col(v, big + (x.kg == null ? ' unset' : ''), 'padKg', 'kgDn', 'kgUp', cap2, 'Weight') + '</div>' +
-      '<p class="flast">' + esc(last ? last.replace(/^last/, 'Last time') : '') + '</p></div><div class="grow"></div>' + liftActions(c, b, t);
-  }
-  if (look === 'c') {
-    // Controls docked at the bottom, by your thumb; the list above is just the record.
-    return top + '<div class="scroll" id="scroll">' + setRows(c, t, b, null) + add + '</div>' +
-      '<div class="dock"><div class="card-h">' + cardLab(b, x, i, !!c.fix) + '<span class="dim small">' + esc(lastLine(b, x, i)) + '</span></div>' + stepsHtml(b, x, true) + liftActions(c, b, t) + '</div>';
-  }
-  // A: the same layout, quieter.
-  return top + '<div class="scroll" id="scroll">' + setRows(c, t, b, (y, k) => '<div class="card calm" id="card"><div class="card-h">' + cardLab(b, y, k, !!c.fix) + '<span class="dim small">' + esc(lastLine(b, y, k)) + '</span></div>' + stepsHtml(b, y, true) + '</div>') + add + '</div>' + liftActions(c, b, t);
+  const b = liftAt(c, t);
+  const card = (x, i) => '<div class="card hero" id="card"><div class="card-h">' + cardLab(b, x, i, !!c.fix) + '<span class="dim small">' + esc(lastLine(b, x, i)) + '</span></div>' + bigSet(b, x) + '</div>';
+  return topHtml(c) + overHtml(c) + liftHead(c, t, b) +
+    '<div class="scroll" id="scroll">' + setRows(c, t, b, card) + '<button class="addbtn" data-a="add">' + ICON.plus + 'Add a set</button></div>' + liftActions(c, b, t);
 }
 function ssScreen(c, t) {
   const blk = c.blocks[t.bi], R = Math.max(...blk.parts.map(p => p.sets.length)), r = t.i;
@@ -809,7 +796,6 @@ function todayScreen() {
   return '<div class="screen paperscreen">' +
     '<p class="date">' + d.toLocaleDateString('en-NZ', { weekday: 'long' }) + ' ' + d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'long' }) + '</p><h1 class="h1">Today</h1>' + main +
     (hist.length ? '<h2 class="h2">Recent</h2>' + hist.map(s => { const n = liftsOf(s).reduce((a, b) => a + b.sets.filter(x => x.kind === 'work' && x.done).length, 0); return '<button class="hist" data-a="openSession" data-id="' + esc(s.id) + '"><span><b>' + esc(dateTxt(s.endedAt)) + '</b> · ' + esc(s.name) + '</span><span>' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min, ' + n + ' sets</span></button>'; }).join('') : '') +
-    '<div class="tryui"><div><b>Workout screen</b><span>Pick a look, then start a workout</span></div><div class="seg2" role="group" aria-label="Workout screen look">' + ['a', 'b', 'c'].map(v => '<button class="' + ((S.settings.look || 'a') === v ? 'on' : '') + '" data-a="look" data-v="' + v + '" aria-pressed="' + ((S.settings.look || 'a') === v) + '">' + v.toUpperCase() + '</button>').join('') + '</div></div>' +
     '<div class="foot"><span>' + esc(backupTxt()) + '</span><div><button data-a="backup">Backup</button><button data-a="sound" aria-pressed="' + S.settings.sound + '">Sound: ' + (S.settings.sound ? 'on' : 'off') + '</button></div></div></div>';
 }
 function editScreen() {

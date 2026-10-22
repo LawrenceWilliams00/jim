@@ -221,7 +221,7 @@ test('the back gesture closes what you are in, not the app', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
 
   await tap('Start');
-  await page.locator('#card .val').nth(1).click();
+  await page.getByRole('button', { name: /^Weight:/ }).click();
   await expect(page.locator('.keys')).toBeVisible();
   await page.goBack();
   await expect(page.locator('.sheet')).toHaveCount(0);
