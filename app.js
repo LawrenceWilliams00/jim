@@ -314,7 +314,7 @@ function startWorkout(r) {
   unlockAudio();
   const cur = makeSession(r);
   if (!cur.blocks.length) { toast('This routine is empty.'); return; }
-  S.cur = cur; UI.screen = 'train'; UI.sheet = null; UI.lastLog = null; UI.toast = null;
+  S.cur = cur; UI.screen = 'train'; UI.sheet = null; UI.lastLog = null; UI.toast = null; UI.showWarm = false;
   touchCur(); keepAwake(); render();
 }
 function slotFromSrc(src) { const r = src && routineById(src.rid); const bl = r && r.blocks[src.bi]; if (!bl) return null; return { r, bl }; }
@@ -440,6 +440,13 @@ const A = {
   skip: () => skipSet(),
   undo: () => undoLast(),
   add: () => { const c = S.cur, t = target(c); if (!t) return; const b = liftAt(c, t), src = b.sets[b.sets.length - 1]; b.sets.push({ kind: 'work', reps: src.reps, kg: src.kg, done: false, skipped: false, touched: false, type: 0 }); touchCur(); render(); },
+  plan: () => openSheet({ type: 'plan' }),
+  planNow: d => { const c = S.cur, t = nextOpen(c), bi = +d.bi; if (!t || bi === t.bi) { UI.sheet = null; render(); return; } const [b] = c.blocks.splice(bi, 1); c.blocks.splice(t.bi > bi ? t.bi - 1 : t.bi, 0, b); c.pick = null; c.fix = null; c.over = null; UI.sheet = null; UI.showWarm = false; UI.scrollToCard = true; touchCur(); render(); },
+  planMove: d => { const c = S.cur, bi = +d.bi, j = bi + +d.d; if (j < 0 || j >= c.blocks.length || blockState(c.blocks[j]) !== 'open') return; [c.blocks[bi], c.blocks[j]] = [c.blocks[j], c.blocks[bi]]; c.pick = null; c.fix = null; touchCur(); render(); },
+  planSkip: d => { const c = S.cur, b = c.blocks[+d.bi]; if (b.kind === 'check') b.skipped = true; else blockSets(b).forEach(x => { if (isOpen(x)) x.skipped = true; }); c.pick = null; c.fix = null; if (c.cardio && c.cardio.bi === +d.bi) c.cardio = null; touchCur(); if (!nextOpen(c)) { UI.sheet = null; finish(); return; } render(); },
+  planBack: d => { const b = S.cur.blocks[+d.bi]; if (b.kind === 'check') b.skipped = false; else blockSets(b).forEach(x => { if (x.skipped) x.skipped = false; }); touchCur(); render(); },
+  showWarm: () => { UI.showWarm = true; render(); },
+  look: d => { S.settings.look = d.v; saveSettings(); render(); },
   later: () => { const c = S.cur, t = nextOpen(c); if (!t || t.bi === c.blocks.length - 1) { UI.sheet = null; toast('This is already the last one.'); return; } const [b] = c.blocks.splice(t.bi, 1); c.blocks.push(b); c.pick = null; c.fix = null; UI.sheet = null; touchCur(); toast(blockTitle(b) + ' moved to the end.'); },
   pick: d => { S.cur.pick = { bi: +d.bi, p: +d.p }; touchCur(); render(); },
   // rest
@@ -601,23 +608,25 @@ function fitKeyboard() {
 if (vv) { vv.addEventListener('resize', fitKeyboard); vv.addEventListener('scroll', fitKeyboard); fitKeyboard(); }
 
 // ---------- training screens ----------
-function pipsHtml(c, resting) {
-  const todo = resting ? 'var(--line-rest)' : 'var(--line)', open = nextOpen(c);
-  const cell = (on, cur, sk) => '<div class="pc" style="background:' + (on ? 'var(--cream)' : sk ? 'var(--skip)' : cur ? 'var(--half)' : todo) + '"></div>';
-  let total = 0, done = 0;
-  const groups = c.blocks.map((b, bi) => {
-    if (b.kind === 'check') { total++; if (b.done) done++; return '<div class="pg" style="flex:1"><div class="pp" style="flex:1">' + cell(b.done, !resting && open && open.bi === bi, b.skipped) + '</div></div>'; }
-    const parts = b.kind === 'ss' ? b.parts : [b];
-    let n = 0;
-    const html = parts.map((p, pi) => {
-      const w = p.sets.filter(x => x.kind === 'work'); n += w.length; total += w.length; done += w.filter(x => x.done).length;
-      const here = !resting && open && open.bi === bi && (b.kind !== 'ss' || open.p === pi);
-      const curIdx = here ? (p.sets[open.i] && p.sets[open.i].kind === 'warm' ? p.sets.findIndex(y => y.kind === 'work') : open.i) : -1;
-      return '<div class="pp" style="flex:' + Math.max(1, w.length) + '">' + p.sets.map((x, i) => x.kind === 'work' ? cell(x.done, i === curIdx, x.skipped) : '').join('') + '</div>';
-    }).join('');
-    return '<div class="pg" style="flex:' + Math.max(1, n) + '">' + html + '</div>';
+// Progress: one bar per exercise, filled as its sets get done. Tap it for the workout list (reorder, skip, do one now).
+function blockSets(b) { return b.kind === 'check' ? null : (b.kind === 'ss' ? b.parts : [b]).flatMap(p => p.sets); }
+function blockState(b) {
+  const sets = blockSets(b);
+  if (!sets) return b.done ? 'done' : b.skipped ? 'skipped' : 'open';
+  if (sets.some(isOpen)) return 'open';
+  return sets.some(x => x.done) ? 'done' : 'skipped';
+}
+function pipsHtml(c, resting, still) {
+  const open = nextOpen(c);
+  let fin = 0;
+  const segs = c.blocks.map((b, bi) => {
+    const sets = blockSets(b), work = sets ? sets.filter(x => x.kind === 'work') : null, st = blockState(b);
+    if (st !== 'open') fin++;
+    const pct = work ? 100 * work.filter(x => x.done).length / Math.max(1, work.length) : b.done ? 100 : 0;
+    return '<span class="seg' + (!resting && open && open.bi === bi ? ' cur' : '') + (st === 'skipped' ? ' sk' : '') + '"><i style="width:' + Math.round(pct) + '%"></i></span>';
   }).join('');
-  return '<div class="pips" role="img" aria-label="' + done + ' of ' + total + ' done">' + groups + '</div>';
+  const label = fin + ' of ' + c.blocks.length + ' done';
+  return still ? '<div class="pips" role="img" aria-label="' + label + '">' + segs + '</div>' : '<button class="pips" data-a="plan" aria-label="' + label + '. Tap to reorder or skip">' + segs + '</button>';
 }
 function topHtml(c, resting) {
   return '<div class="top"><button class="icon" data-a="toToday" aria-label="Back to Today">' + ICON.back + '</button>' +
@@ -625,11 +634,11 @@ function topHtml(c, resting) {
     '<button class="txtbtn" data-a="askFinish">Finish</button></div>' + pipsHtml(c, resting);
 }
 const overHtml = c => (c.over ? '<div class="over" role="status"><span>' + ICON.timer + 'Rest is up, you’re on</span><span data-tick="over">' + mmss(now() - c.over.since) + ' over</span></div>' : '');
-function stepsHtml(b, x) {
+function stepsHtml(b, x, light) {
   const v = kgVal(x.kg), cls = v.length >= 5 ? ' s' : v.length >= 4 ? ' m' : '';
   const c1 = x.kind === 'warm' ? (x.frac === 'easy' ? 'easy reps' : Math.round(x.frac * 100) + '% of ' + (workKg(b) == null ? 'working' : kgVal(workKg(b)) + unit(workKg(b)))) : 'reps, aim ' + range(b.lo, b.hi);
   const c2 = x.kg == null ? (x.kind === 'warm' ? 'set working weight' : 'set a weight') : x.kg === 0 ? 'bodyweight' : 'kg';
-  return '<div class="steps"><button class="sq" data-a="repsDn" aria-label="One fewer rep">' + ICON.minus + '</button>' +
+  return '<div class="steps' + (light ? ' light' : '') + '"><button class="sq" data-a="repsDn" aria-label="One fewer rep">' + ICON.minus + '</button>' +
     '<button class="val" data-a="padReps" aria-label="Reps: ' + x.reps + ', tap to type">' + x.reps + '</button>' +
     '<button class="sq" data-a="repsUp" aria-label="One more rep">' + ICON.plus + '</button><span class="times" aria-hidden="true">×</span>' +
     '<button class="sq" data-a="kgDn" aria-label="Less weight">' + ICON.minus + '</button>' +
@@ -642,29 +651,72 @@ function lastTxt(b, x, wi) {
   const last = lastFor(b.exId, b.lo, b.hi), lw = last && last.all.filter(y => y.done)[wi];
   return lw ? 'last ' + setTxt(lw) : 'no last time';
 }
-function liftScreen(c, t) {
-  const b = liftAt(c, t), ex = exById(b.exId), note = ex && ex.notes;
-  let wi = -1, wu = 0;
-  const rows = b.sets.map((x, i) => {
-    if (x.kind === 'work') wi++; else wu++;
-    const label = x.kind === 'warm' ? 'Warm-up ' + wu : 'Set ' + (wi + 1);
-    const isCard = c.fix ? c.fix.bi === t.bi && c.fix.i === i : i === t.i;
-    const lt = lastTxt(b, x, wi), cls = 'row' + (x.kind === 'warm' ? ' warm' : '');
-    if (isCard) return '<div class="card" id="card"><div class="card-h"><b>' + label + (c.fix ? ', fixing' : '') + '</b><span class="dim small">' + esc(lt) + '</span></div>' + stepsHtml(b, x) +
-      (x.kind === 'work' ? '<button class="typebtn" data-a="type" aria-label="Set type: ' + TYPES[x.type || 0] + '. Tap to change">' + TYPES[x.type || 0] + ICON.down + '</button>' : '<div style="height:10px"></div>') + '</div>';
-    if (x.done) return '<button class="' + cls + '" data-a="row" data-bi="' + t.bi + '" data-i="' + i + '" aria-label="' + label + ', ' + esc(setTxt(x)) + '. Tap to fix"><span class="rl">' + label + '</span><span class="rv">' + esc(setTxt(x)) + (x.kg ? ' <small>kg</small>' : '') + '</span><span class="rlast">' + esc(lt) + '</span>' + ICON.check + '</button>';
-    if (x.skipped) return '<button class="' + cls + ' pending" data-a="row" data-bi="' + t.bi + '" data-i="' + i + '" aria-label="' + label + ' skipped. Tap to do it"><span class="rl">' + label + '</span><span class="rv">Skipped</span><span class="rlast">tap to do it</span><span></span></button>';
-    return '<div class="' + cls + ' pending"><span class="rl">' + label + '</span><span class="rv">— × ' + esc(kgVal(x.kg)) + (x.kg ? ' <small>kg</small>' : '') + '</span><span class="rlast">' + esc(lt) + '</span><span></span></div>';
-  }).join('');
+// ---------- the lift screen, in three looks while choosing (Today → Workout screen) ----------
+function lastSet(b, wi) { const last = lastFor(b.exId, b.lo, b.hi); return last ? last.all.filter(y => y.done)[wi] || null : null; }
+function setLabel(b, i) { const x = b.sets[i], n = b.sets.slice(0, i + 1).filter(y => y.kind === x.kind).length; return (x.kind === 'warm' ? 'Warm-up ' : 'Set ') + n; }
+// Set label; on working sets it's also the button for the set type (Working / Drop set / To failure).
+function cardLab(b, x, i, fixing) {
+  const label = setLabel(b, i) + (x.kind === 'work' && x.type ? ' · ' + TYPES[x.type] : '') + (fixing ? ', fixing' : '');
+  return x.kind === 'work' ? '<button class="cardlab" data-a="type" aria-label="' + label + '. Tap to change the set type">' + esc(label) + ICON.down + '</button>' : '<b class="cardlab">' + esc(label) + '</b>';
+}
+function lastLine(b, x, i) {
+  if (x.kind === 'warm') return '';
+  const lw = lastSet(b, b.sets.slice(0, i).filter(y => y.kind === 'work').length);
+  return lw ? 'last ' + setTxt(lw) + unit(lw.kg) : '';
+}
+// The list of sets. Finished warm-ups fold into one row; nothing says "no last time" over and over.
+function setRows(c, t, b, card) {
+  const warms = b.sets.filter(x => x.kind === 'warm'), fixI = c.fix && c.fix.bi === t.bi ? c.fix.i : -1;
+  const fold = warms.length > 1 && warms.every(x => !isOpen(x)) && !UI.showWarm && !(fixI >= 0 && b.sets[fixI].kind === 'warm');
+  let out = fold ? '<button class="row warm fold" data-a="showWarm" aria-label="' + warms.length + ' warm-ups done. Tap to show them"><span class="rl">Warm-ups</span><span class="rv">' + warms.length + ' done</span><span class="rlast"></span>' + ICON.check + '</button>' : '';
+  b.sets.forEach((x, i) => {
+    if (fold && x.kind === 'warm') return;
+    const label = setLabel(b, i), isCur = fixI >= 0 ? fixI === i : i === t.i, cls = 'row' + (x.kind === 'warm' ? ' warm' : '') + (isCur ? ' now' : '');
+    if (isCur && card) { out += card(x, i); return; }
+    const kg = x.kg ? ' <small>kg</small>' : '', id = isCur ? ' id="card"' : '';
+    if (x.done && !isCur) out += '<button class="' + cls + '" data-a="row" data-bi="' + t.bi + '" data-i="' + i + '" aria-label="' + label + ', ' + esc(setTxt(x)) + '. Tap to fix"><span class="rl">' + label + '</span><span class="rv">' + esc(setTxt(x)) + kg + '</span><span class="rlast"></span>' + ICON.check + '</button>';
+    else if (x.skipped && !isCur) out += '<button class="' + cls + ' pending" data-a="row" data-bi="' + t.bi + '" data-i="' + i + '" aria-label="' + label + ' skipped. Tap to do it"><span class="rl">' + label + '</span><span class="rv">Skipped</span><span class="rlast">tap to do it</span><span></span></button>';
+    else out += '<div class="' + cls + (isCur ? '' : ' pending') + '"' + id + '><span class="rl">' + label + '</span><span class="rv">' + (isCur ? x.reps : '—') + ' × ' + esc(kgVal(x.kg)) + kg + '</span><span class="rlast">' + esc(isCur ? '' : lastLine(b, x, i)) + '</span><span></span></div>';
+  });
+  return out;
+}
+function liftHead(c, t, b) {
+  const ex = exById(b.exId), note = ex && ex.notes;
+  return '<div class="head"><h1><button class="h1btn' + (b.name.length > 14 ? ' sm' : '') + '" data-a="openEx" data-bi="' + t.bi + '">' + esc(b.name) + ICON.chev + '</button></h1></div>' +
+    (note ? '<button class="notebtn" data-a="openEx" data-bi="' + t.bi + '" aria-label="Notes: ' + esc(note) + '. Tap to edit"><span class="note">' + esc(note) + '</span></button>' : '');
+}
+function liftActions(c, b, t) {
   const tx = b.sets[t.i];
-  const label = c.fix ? 'Save' : tx.kg == null ? 'Set a weight' : 'Log ' + (tx.kind === 'warm' ? 'warm-up ' + b.sets.slice(0, t.i + 1).filter(y => y.kind === 'warm').length : 'set ' + b.sets.slice(0, t.i + 1).filter(y => y.kind === 'work').length);
-  const nb = c.blocks[t.bi + 1];
-  return topHtml(c) + overHtml(c) +
-    '<div class="head"><h1><button class="h1btn' + (b.name.length > 12 ? ' sm' : '') + '" data-a="openEx" data-bi="' + t.bi + '">' + esc(b.name) + ICON.chev + '</button></h1><button class="chipbtn" data-a="later" aria-label="Do this exercise later">' + ICON.later + 'Later</button></div>' +
-    (note ? '<button class="notebtn" data-a="openEx" data-bi="' + t.bi + '" aria-label="Notes: ' + esc(note) + '. Tap to edit"><span class="note">' + esc(note) + '</span></button>' : '') +
-    '<div class="scroll" id="scroll">' + rows + '<button class="addbtn" data-a="add">' + ICON.plus + 'Add a set</button></div>' +
-    '<div class="actions">' + (c.fix ? '' : '<button class="skip" data-a="skip">Skip</button>') + '<button class="primary" data-a="log">' + label + '</button></div>' +
-    '<p class="then">' + (nb ? 'Then ' + esc(blockTitle(nb)) : 'Last one') + '</p>';
+  const label = c.fix ? 'Save' : tx.kg == null ? 'Set a weight' : 'Log ' + (tx.kind === 'warm' ? 'warm-up ' : 'set ') + b.sets.slice(0, t.i + 1).filter(y => y.kind === tx.kind).length;
+  return '<div class="actions">' + (c.fix ? '' : '<button class="skip" data-a="skip">Skip</button>') + '<button class="primary" data-a="log">' + label + '</button></div>';
+}
+function liftScreen(c, t) {
+  const b = liftAt(c, t), i = c.fix ? c.fix.i : t.i, x = b.sets[i], look = S.settings.look || 'a';
+  const add = '<button class="addbtn" data-a="add">' + ICON.plus + 'Add a set</button>';
+  const top = topHtml(c) + overHtml(c) + liftHead(c, t, b);
+  if (look === 'b') {
+    // One set at a time: the sets are a row of dots, and the set you're on gets the whole middle of the screen.
+    const dots = b.sets.map((y, k) => {
+      const cur = k === i, n = b.sets.slice(0, k + 1).filter(z => z.kind === y.kind).length, txt = y.done ? ICON.check : y.kind === 'warm' ? 'W' : String(n);
+      const cls = 'sdot' + (y.done ? ' on' : '') + (cur ? ' cur' : '') + (y.skipped ? ' sk' : '') + (y.kind === 'warm' ? ' w' : '');
+      return (y.done || y.skipped) && !cur ? '<button class="' + cls + '" data-a="row" data-bi="' + t.bi + '" data-i="' + k + '" aria-label="' + setLabel(b, k) + (y.done ? ', ' + esc(setTxt(y)) + '. Tap to fix' : ' skipped. Tap to do it') + '"><i>' + txt + '</i></button>' : '<span class="' + cls + '" aria-hidden="true"><i>' + txt + '</i></span>';
+    }).join('');
+    const v = kgVal(x.kg), big = v.length >= 5 ? ' s' : v.length >= 4 ? ' m' : '';
+    const cap1 = x.kind === 'warm' ? (x.frac === 'easy' ? 'easy reps' : Math.round(x.frac * 100) + '% of working') : 'reps · aim ' + range(b.lo, b.hi);
+    const cap2 = x.kg == null ? 'set a weight' : x.kg === 0 ? 'bodyweight' : 'kg', last = lastLine(b, x, i);
+    const col = (val, cls, pad, dn, up, cap, name) => '<div class="fcol"><button class="fval' + cls + '" data-a="' + pad + '" aria-label="' + name + ': ' + esc(val) + ', tap to type">' + esc(val) + '</button><div class="fpm"><button data-a="' + dn + '" aria-label="' + (name === 'Reps' ? 'One fewer rep' : 'Less weight') + '">' + ICON.minus + '</button><button data-a="' + up + '" aria-label="' + (name === 'Reps' ? 'One more rep' : 'More weight') + '">' + ICON.plus + '</button></div><span class="fcap">' + esc(cap) + '</span></div>';
+    return top + '<div class="sdots">' + dots + '<button class="sdot addone" data-a="add" aria-label="Add a set"><i>' + ICON.plus + '</i></button></div>' +
+      '<div class="grow"></div><div class="focus" id="card"><div class="flab">' + cardLab(b, x, i, !!c.fix) + '</div>' +
+      '<div class="fnums">' + col(String(x.reps), '', 'padReps', 'repsDn', 'repsUp', cap1, 'Reps') + '<span class="fx" aria-hidden="true">×</span>' + col(v, big + (x.kg == null ? ' unset' : ''), 'padKg', 'kgDn', 'kgUp', cap2, 'Weight') + '</div>' +
+      '<p class="flast">' + esc(last ? last.replace(/^last/, 'Last time') : '') + '</p></div><div class="grow"></div>' + liftActions(c, b, t);
+  }
+  if (look === 'c') {
+    // Controls docked at the bottom, by your thumb; the list above is just the record.
+    return top + '<div class="scroll" id="scroll">' + setRows(c, t, b, null) + add + '</div>' +
+      '<div class="dock"><div class="card-h">' + cardLab(b, x, i, !!c.fix) + '<span class="dim small">' + esc(lastLine(b, x, i)) + '</span></div>' + stepsHtml(b, x, true) + liftActions(c, b, t) + '</div>';
+  }
+  // A: the same layout, quieter.
+  return top + '<div class="scroll" id="scroll">' + setRows(c, t, b, (y, k) => '<div class="card calm" id="card"><div class="card-h">' + cardLab(b, y, k, !!c.fix) + '<span class="dim small">' + esc(lastLine(b, y, k)) + '</span></div>' + stepsHtml(b, y, true) + '</div>') + add + '</div>' + liftActions(c, b, t);
 }
 function ssScreen(c, t) {
   const blk = c.blocks[t.bi], R = Math.max(...blk.parts.map(p => p.sets.length)), r = t.i;
@@ -747,7 +799,7 @@ function backupTxt() { const t = S.settings.lastBackup; return t ? 'Backed up ' 
 function todayScreen() {
   const d = new Date(), c = S.cur, rs = routinesSorted(), sug = suggestedRoutine(), sel = routineById(UI.sel) || sug;
   let main;
-  if (c) main = '<div class="wcard" style="margin-top:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><b style="font-size:22px;min-width:0">' + esc(c.name) + '</b><span data-tick="elapsed" style="font-size:17px">' + mmss(now() - c.startedAt) + '</span></div><div style="margin-top:10px">' + pipsHtml(c) + '</div><button class="primary" style="width:100%;margin-top:16px" data-a="resume">Resume</button></div>';
+  if (c) main = '<div class="wcard" style="margin-top:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><b style="font-size:22px;min-width:0">' + esc(c.name) + '</b><span data-tick="elapsed" style="font-size:17px">' + mmss(now() - c.startedAt) + '</span></div><div style="margin-top:10px">' + pipsHtml(c, false, true) + '</div><button class="primary" style="width:100%;margin-top:16px" data-a="resume">Resume</button></div>';
   else if (!rs.length) main = '<button class="ghost ink" style="margin-top:16px;height:56px" data-a="newRoutine">' + ICON.plus + 'New routine</button>';
   else main = '<div class="rts">' + rs.map(r => '<button class="rt' + (r === sel ? ' on' : '') + '" data-a="pickRoutine" data-id="' + esc(r.id) + '" aria-pressed="' + (r === sel) + '"><span style="min-width:0"><b>' + esc(r.name || 'Untitled routine') + '</b><span class="sub">' + esc(routineSummary(r)) + '</span></span>' + (r === sug && rs.length > 1 ? '<span class="tag">Next</span>' : '') + '</button>').join('') + '</div>' +
     '<div class="wcard">' + (blockLines(sel) || '<p class="dim" style="padding:4px 0">Empty</p>') +
@@ -757,6 +809,7 @@ function todayScreen() {
   return '<div class="screen paperscreen">' +
     '<p class="date">' + d.toLocaleDateString('en-NZ', { weekday: 'long' }) + ' ' + d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'long' }) + '</p><h1 class="h1">Today</h1>' + main +
     (hist.length ? '<h2 class="h2">Recent</h2>' + hist.map(s => { const n = liftsOf(s).reduce((a, b) => a + b.sets.filter(x => x.kind === 'work' && x.done).length, 0); return '<button class="hist" data-a="openSession" data-id="' + esc(s.id) + '"><span><b>' + esc(dateTxt(s.endedAt)) + '</b> · ' + esc(s.name) + '</span><span>' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min, ' + n + ' sets</span></button>'; }).join('') : '') +
+    '<div class="tryui"><div><b>Workout screen</b><span>Pick a look, then start a workout</span></div><div class="seg2" role="group" aria-label="Workout screen look">' + ['a', 'b', 'c'].map(v => '<button class="' + ((S.settings.look || 'a') === v ? 'on' : '') + '" data-a="look" data-v="' + v + '" aria-pressed="' + ((S.settings.look || 'a') === v) + '">' + v.toUpperCase() + '</button>').join('') + '</div></div>' +
     '<div class="foot"><span>' + esc(backupTxt()) + '</span><div><button data-a="backup">Backup</button><button data-a="sound" aria-pressed="' + S.settings.sound + '">Sound: ' + (S.settings.sound ? 'on' : 'off') + '</button></div></div></div>';
 }
 function editScreen() {
@@ -982,6 +1035,22 @@ function sessionSheet() {
     '<div style="margin-top:8px">' + lines + '</div>',
     '<button class="primary" data-a="close">Done</button><button class="wide danger" data-a="delSession" data-id="' + esc(s.id) + '">' + (UI.confirm === 'del' ? 'Tap again to delete' : 'Delete workout') + '</button>');
 }
+// The workout list: what's done, what's now, what's left. Tap one to do it now (the rest keep their order), skip one, or bring it back.
+function planSheet() {
+  const c = S.cur, open = nextOpen(c);
+  const rows = c.blocks.map((b, bi) => {
+    const st = blockState(b), cur = open && open.bi === bi, sets = blockSets(b), work = sets ? sets.filter(x => x.kind === 'work') : [];
+    const sub = st === 'skipped' ? 'Skipped' : b.kind === 'check' ? (b.done ? 'Done' : plural(b.items.length, 'item')) : (b.kind === 'ss' ? 'Superset, ' : '') + (work.some(x => x.done) || st === 'done' ? work.filter(x => x.done).length + ' of ' : '') + plural(work.length, 'set');
+    const icon = st === 'done' ? '<span class="pls on">' + ICON.check + '</span>' : cur ? '<span class="pls cur"></span>' : st === 'skipped' ? '<span class="pls sk"></span>' : '<span class="pls"></span>';
+    const name = '<span class="plm-t"><b>' + esc(blockTitle(b)) + '</b><span class="sub">' + (cur ? 'Now · ' : '') + esc(sub) + '</span></span>';
+    let main, ctl = '';
+    if (st === 'open' && !cur) main = '<button class="plm" data-a="planNow" data-bi="' + bi + '" aria-label="' + esc(blockTitle(b)) + ': do it now">' + name + '<span class="plnow">Do now</span></button>';
+    else main = '<div class="plm">' + name + '</div>';
+    if (st === 'open') ctl = '<button class="plx" data-a="planSkip" data-bi="' + bi + '" aria-label="Skip ' + esc(blockTitle(b)) + '">Skip</button>'; else if (st === 'skipped') ctl = '<button class="plx" data-a="planBack" data-bi="' + bi + '" aria-label="Bring back ' + esc(blockTitle(b)) + '">Bring back</button>';
+    return '<div class="plr' + (cur ? ' cur' : '') + (st !== 'open' ? ' ' + st : '') + '">' + icon + main + ctl + '</div>';
+  }).join('');
+  return sheetBox('This workout', '<h2>This workout</h2>', '<div class="plist">' + rows + '</div>', '<button class="primary" data-a="close">Done</button>');
+}
 function backupSheet() {
   const t = S.settings.lastBackup;
   return sheetBox('Backup', '<h2>Backup</h2><p class="dim" style="margin-top:4px">' + esc(t ? 'Last one ' + dateTxt(t) + '.' : 'No backup yet.') + ' Your workouts only live on this phone.</p>', '',
@@ -997,6 +1066,7 @@ function sheetHtml() {
   if (ty === 'session') return sessionSheet();
   if (ty === 'backup') return backupSheet();
   if (!c) return '';
+  if (ty === 'plan') return planSheet();
   return ty === 'pad' ? padSheet() : ty === 'change' ? changeSheet() : ty === 'ex' ? exSheet() : ty === 'finish' ? finishSheet() : '';
 }
 // A number typed into a field but not yet stored (the field still has focus) is stored before anything else happens.
@@ -1028,7 +1098,7 @@ function render() {
   const tc = cls === 'form' ? '#18492F' : cls === 'paper' ? '#F7EBC4' : cls === 'resting' ? '#0B2F1D' : '#0E3A24', meta = document.querySelector('meta[name="theme-color"]');
   if (meta && meta.content !== tc) meta.content = tc;
   const sc = document.getElementById('scroll');
-  if (sc) { if (UI.scrollToCard) { const card = document.getElementById('card'); if (card) card.scrollIntoView({ block: 'nearest' }); } else sc.scrollTop = keep; }
+  if (sc) { if (UI.scrollToCard) { const card = document.getElementById('card'); if (card && sc.contains(card)) card.scrollIntoView({ block: 'nearest' }); } else sc.scrollTop = keep; }
   UI.scrollToCard = false;
   const np = document.querySelector('.paperscreen'); if (np && prevScreen === UI.screen) np.scrollTop = pageKeep;
   const ns = document.querySelector('.sh-b'); if (ns && sheetEl && !ns.parentNode.classList.contains('enter')) ns.scrollTop = sheetKeep;

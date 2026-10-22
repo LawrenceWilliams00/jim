@@ -41,11 +41,13 @@ button:active:not(:disabled) { opacity: 0.7; }
 .top-mid { display: flex; gap: 8px; font-size: 15px; font-weight: 500; min-width: 0; white-space: nowrap; }
 .top-mid .dim { overflow: hidden; text-overflow: ellipsis; }
 .txtbtn { flex: none; height: 44px; padding: 0 12px; font-size: 15px; font-weight: 500; color: var(--cream-2); }
-.pips { flex: none; display: flex; gap: 10px; padding-top: 10px; }
-.pg { display: flex; gap: 4px; }
-.pp { display: flex; }
-.pc { flex: 1; height: 8px; border-radius: 4px; }
-.pc + .pc { margin-left: -2px; }
+/* Progress: a bar per exercise. During a workout it's also the button for the workout list. */
+.pips { flex: none; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 6px 0; }
+button.pips { min-height: 44px; margin: -4px 0; }
+.seg { flex: 1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.resting .seg, .seg.sk { background: var(--line-rest); }
+.seg i { display: block; height: 100%; border-radius: 3px; background: var(--cream); }
+.seg.cur { height: 8px; border-radius: 4px; background: var(--half); }
 .over { flex: none; margin-top: 14px; height: 52px; border-radius: 14px; background: var(--gold); color: var(--on-gold); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-size: 17px; font-weight: 700; }
 .over span { display: flex; align-items: center; gap: 8px; }
 
@@ -286,3 +288,65 @@ textarea { min-height: 96px; resize: vertical; }
 .topbar .tb-l { justify-self: start; color: var(--cream-2); }
 .topbar .tb-r { justify-self: end; color: var(--gold); }
 .hidden-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* ---------- the lift screen ---------- */
+.cardlab { display: flex; align-items: center; gap: 2px; min-height: 44px; margin: -12px 0 -12px -4px; padding: 0 4px; font-size: 15px; font-weight: 700; color: var(--cream); }
+.cardlab svg { opacity: 0.7; }
+.card-h { min-height: 24px; }
+.row.fold .rv { font-weight: 500; font-size: 17px; }
+.row.now { background: var(--raised); border-radius: 12px; border-bottom-color: transparent; margin: 2px 0; padding: 0 8px; box-sizing: border-box; box-shadow: inset 3px 0 0 var(--gold); }
+.steps.light .sq { background: transparent; box-shadow: inset 0 0 0 1.5px var(--line); border-radius: 22px; }
+.card.calm { padding-bottom: 10px; }
+/* C: controls docked at the bottom */
+.dock { flex: none; margin: 8px calc(-1 * max(var(--gut), env(safe-area-inset-left, 0px))) calc(-12px - env(safe-area-inset-bottom, 0px)); padding: 14px max(var(--gut), env(safe-area-inset-right, 0px)) calc(12px + env(safe-area-inset-bottom, 0px)) max(var(--gut), env(safe-area-inset-left, 0px)); background: var(--raised); border-radius: 22px 22px 0 0; }
+.dock .card-h { padding: 0 2px; }
+.dock .actions { padding-top: 12px; }
+/* B: one set at a time */
+.grow { flex: 1; min-height: 8px; }
+.sdots { flex: none; display: flex; flex-wrap: nowrap; margin: 8px -6px 0; }
+.sdot { flex: 0 1 40px; min-width: 26px; height: 44px; display: flex; align-items: center; justify-content: center; }
+.sdot.w { flex-basis: 30px; }
+.sdot i { width: 30px; height: 30px; border-radius: 15px; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1.5px var(--line); font-size: 13px; font-weight: 700; font-style: normal; color: var(--cream-2); }
+.sdot.w i { width: 22px; height: 22px; font-size: 11px; }
+.sdot.on i { background: var(--cream); color: var(--forest); box-shadow: none; }
+.sdot.on i svg { width: 14px; height: 14px; }
+.sdot.cur i { box-shadow: inset 0 0 0 2px var(--gold); color: var(--cream); }
+.sdot.sk i { opacity: 0.45; }
+.sdot.addone i { box-shadow: none; color: var(--cream-2); }
+.focus { flex: none; text-align: center; }
+.flab { display: flex; justify-content: center; }
+.flab .cardlab { margin: 0; font-size: 17px; color: var(--cream-2); }
+.fnums { display: flex; justify-content: center; align-items: flex-start; gap: 8px; margin-top: 6px; }
+.fcol { flex: 1; max-width: 170px; display: flex; flex-direction: column; align-items: center; }
+.fval { height: 96px; min-width: 100px; padding: 0 6px; font-size: 88px; font-weight: 700; line-height: 1; letter-spacing: -2px; text-align: center; }
+.fval.m { font-size: 70px; } .fval.s { font-size: 56px; letter-spacing: -1px; }
+.fval.unset { color: var(--half); }
+.fx { flex: none; padding-top: 30px; font-size: 28px; color: var(--cream-2); }
+.fpm { display: flex; gap: 10px; margin-top: 4px; }
+.fpm button { width: 52px; height: 44px; border-radius: 22px; box-shadow: inset 0 0 0 1.5px var(--line); display: flex; align-items: center; justify-content: center; }
+.fcap { margin-top: 8px; font-size: 13px; color: var(--cream-2); }
+.flast { margin-top: 14px; min-height: 20px; font-size: 15px; color: var(--cream-2); }
+/* ---------- the workout list ---------- */
+.plist { margin-top: 6px; }
+.plr { display: flex; align-items: center; gap: 6px; min-height: 64px; border-top: 1px solid var(--line); }
+.pls { flex: none; width: 24px; height: 24px; border-radius: 12px; box-shadow: inset 0 0 0 1.5px var(--line); display: flex; align-items: center; justify-content: center; }
+.pls.on { background: var(--cream); color: var(--forest); box-shadow: none; }
+.pls.on svg { width: 14px; height: 14px; }
+.pls.cur { box-shadow: inset 0 0 0 2px var(--gold); }
+.pls.cur::after { content: ''; width: 8px; height: 8px; border-radius: 4px; background: var(--gold); }
+.pls.sk { box-shadow: none; background: var(--line); }
+.plm { flex: 1; min-width: 0; min-height: 56px; display: flex; align-items: center; gap: 8px; text-align: left; padding-left: 6px; }
+.plm-t { flex: 1; min-width: 0; }
+.plm-t b { display: block; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plm-t .sub { display: block; font-size: 13px; color: var(--cream-2); }
+.plr.done .plm-t b, .plr.skipped .plm-t b { color: var(--cream-2); font-weight: 500; }
+.plnow { flex: none; height: 32px; padding: 0 12px; border-radius: 16px; box-shadow: inset 0 0 0 1.5px var(--gold); display: flex; align-items: center; font-size: 13px; font-weight: 600; color: var(--gold); }
+.sq.ghosty { background: transparent; }
+.plx { flex: none; height: 44px; padding: 0 6px; font-size: 15px; font-weight: 600; color: var(--cream-2); }
+/* temporary: choosing a look on Today */
+.tryui { margin-top: 24px; padding: 12px 12px 12px 16px; border-radius: 16px; box-shadow: inset 0 0 0 1px var(--paper-line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tryui b { display: block; font-size: 15px; }
+.tryui span { display: block; font-size: 13px; color: var(--ink-2); }
+.tryui .seg2 { background: var(--ink); flex: none; }
+.tryui .seg2 button { min-width: 48px; color: var(--cream-2); }
+.tryui .seg2 button.on { background: var(--gold); color: var(--on-gold); }

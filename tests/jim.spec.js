@@ -359,3 +359,24 @@ test('numbers in the editors can be typed as well as stepped', async ({ page }) 
   await type('#v-ticks-0', '3');
   await expect(page.locator('#v-ticks-0')).toHaveValue('3');
 });
+
+test('the workout list does an exercise now, skips one, and brings it back', async ({ page }) => {
+  const { tap } = await open(page, { seed: backup });
+  await tap('Start');
+  await expect(page.locator('.head')).toContainText('Bench press');
+  await page.locator('button.pips').click();
+  await tap('Back squat: do it now');
+  await expect(page.locator('.head'), 'squat jumps the queue, not to the end').toContainText('Back squat');
+  await page.locator('button.pips').click();
+  await expect(page.locator('.plr').nth(0)).toContainText('Back squat');
+  await expect(page.locator('.plr').nth(1)).toContainText('Bench press');
+  await tap('Skip Bench press');
+  await expect(page.locator('.plr').nth(1)).toContainText('Skipped');
+  await tap('Bring back Bench press');
+  await expect(page.locator('.plr').nth(1)).toContainText('4 sets');
+  await tap('Skip Bench press');
+  await tap('Done');
+  for (let k = 1; k <= 3; k++) { await tap(`Log set ${k}`); if (k < 3) await tap('Skip rest'); }
+  await expect(page.locator('.stats'), 'skipping the rest of the list finishes the workout').toBeVisible();
+  await expect(page.locator('.xr', { hasText: 'Bench press' })).toContainText('Skipped');
+});
