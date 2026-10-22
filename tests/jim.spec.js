@@ -180,8 +180,13 @@ test.describe('with the on-screen keyboard open', () => {
     const { tap } = await open(page, { seed: backup });
     await page.getByRole('button', { name: 'Edit' }).click();
     await tap('Checklist');
-    for (const item of ['Bike', 'Band pull-aparts', 'Dislocates']) { await page.keyboard.type(item); await tap('Add an item'); }
+    // Enter walks through the list: item, its detail, then a fresh item.
+    for (const [item, detail] of [['Bike', '5 min'], ['Band pull-aparts', '2 × 15'], ['Dislocates', '× 10']]) {
+      await page.keyboard.type(item); await page.keyboard.press('Enter');
+      await page.keyboard.type(detail); await page.keyboard.press('Enter');
+    }
     await page.keyboard.type('Push-ups');
+    await expect(page.locator('[data-ci="2"][data-cf="detail"]')).toHaveValue('× 10');
     await page.locator('[data-ci="3"][data-cf="text"]').focus();
     const kb = 340;
     await page.evaluate(h => window.__keyboard(h), kb);

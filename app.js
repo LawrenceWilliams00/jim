@@ -453,6 +453,9 @@ const A = {
   finish: () => finish(),
   discard: () => { if (UI.confirm !== 'discard') { UI.confirm = 'discard'; render(); return; } const ids = liftsOf(S.cur).map(b => b.exId); S.cur = null; pruneEx(ids); UI.sheet = null; UI.confirm = null; UI.screen = 'today'; letSleep(); touchCur(); render(); },
   summaryDone: () => { UI.screen = 'today'; UI.summary = null; render(); },
+  // which typing layout to use while comparing them
+  ui: d => { S.settings.ui = d.v; saveSettings(); render(); },
+  blur: () => { const ae = document.activeElement; if (ae && ae.blur) ae.blur(); },
   // backup
   backup: () => openSheet({ type: 'backup' }),
   backupSave: () => { const f = backupFile(), url = URL.createObjectURL(f), a = document.createElement('a'); a.href = url; a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000); markBackedUp(); },
@@ -468,16 +471,27 @@ $app.addEventListener('change', e => {
     toast(got.length ? 'Restored ' + got.join(' and ') + '.' : 'Nothing new in that backup.');
   }).catch(() => toast('That file isn’t a Jim backup.'));
 });
+// Tapping Done in a docked field mustn't take focus away first, or the bar drops out from under the finger.
+$app.addEventListener('pointerdown', e => { if (e.target.closest('.dockdone')) e.preventDefault(); });
 $app.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT') return;
   e.preventDefault();
-  if (e.target.id === 'pick-q') { const first = document.querySelector('.picklist .pickrow'); if (first && UI.sheet.q.trim()) first.click(); return; }
-  e.target.blur();
+  const t = e.target;
+  if (t.id === 'pick-q') { const first = document.querySelector('.picklist .pickrow'); if (first && UI.sheet.q.trim()) first.click(); return; }
+  if (t.dataset.ci != null) {
+    const i = +t.dataset.ci, bl = sheetBlock(), go = (k, f) => { const el = document.querySelector('[data-ci="' + k + '"][data-cf="' + f + '"]'); if (el) { el.focus(); el.scrollIntoView({ block: 'nearest' }); } };
+    if (t.dataset.cf === 'text') go(i, 'detail');
+    else if (i < bl.items.length - 1) go(i + 1, 'text');
+    else if (String(bl.items[i].text || '').trim()) A.addItem();
+    else t.blur();
+    return;
+  }
+  t.blur();
 });
 $app.addEventListener('input', e => {
   const el = e.target;
   if (el.id === 'notes') { const ex = exById(el.dataset.ex); if (ex) { ex.notes = el.value; saveEx(ex); } return; }
-  if (el.id === 'pick-q') { UI.sheet.q = el.value; const pl = document.querySelector('.picklist'); if (pl) pl.innerHTML = pickListHtml(); return; }
+  if (el.id === 'pick-q') { UI.sheet.q = el.value; const pl = document.querySelector('.picklist'); if (pl) { pl.innerHTML = pickListHtml(); pl.parentNode.scrollTop = 0; } sheetEdges(); return; }
   const r = curRoutine(); if (!r) return;
   if (el.dataset.rf === 'name') { r.name = el.value; saveRoutine(r); return; }
   if (el.dataset.f === 'exname') { const t = sheetSlot(), ex = t && exById(t.exId); if (ex) { ex.name = el.value; saveEx(ex); } return; }
@@ -510,16 +524,30 @@ function paintRest(root, r) {
 }
 setInterval(tick, 250);
 
+// Lines under a sheet's header and over its footer, only when there's something scrolled past them.
+function sheetEdges() {
+  const b = document.querySelector('.sh-b'); if (!b) return;
+  b.parentNode.classList.toggle('scrolled', b.scrollTop > 1);
+  b.parentNode.classList.toggle('more', b.scrollTop + b.clientHeight < b.scrollHeight - 1);
+}
+$app.addEventListener('scroll', e => { if (e.target.classList && e.target.classList.contains('sh-b')) sheetEdges(); }, true);
+
 // ---------- on-screen keyboard ----------
 // Chrome on Android shrinks the page when the keyboard opens (interactive-widget=resizes-content in index.html).
 // Where a browser only shrinks the visible area instead, this lifts sheets above the keyboard and keeps the focused field in view.
 const vv = window.visualViewport;
+let fullH = 0, fullW = 0;
 function fitKeyboard() {
   const root = document.documentElement, kb = Math.max(0, Math.round(root.clientHeight - vv.height - vv.offsetTop));
+  if (vv.width !== fullW) { fullW = vv.width; fullH = 0; } // rotated: start again
+  fullH = Math.max(fullH, vv.height);
+  const opened = fullH - vv.height > 120 && !root.classList.contains('kb');
+  root.classList.toggle('kb', fullH - vv.height > 120);
   root.style.setProperty('--kb', kb + 'px');
   root.style.setProperty('--vvh', Math.round(vv.height) + 'px');
+  sheetEdges();
   const ae = document.activeElement;
-  if (ae && ae.matches('input, textarea') && ae.closest('.sheet')) ae.scrollIntoView({ block: 'nearest' });
+  if (ae && ae.matches('input, textarea') && ae.closest('.sh-b')) ae.scrollIntoView({ block: opened ? 'center' : 'nearest' });
 }
 if (vv) { vv.addEventListener('resize', fitKeyboard); vv.addEventListener('scroll', fitKeyboard); fitKeyboard(); }
 
@@ -680,6 +708,7 @@ function todayScreen() {
   return '<div class="screen paperscreen">' +
     '<p class="date">' + d.toLocaleDateString('en-NZ', { weekday: 'long' }) + ' ' + d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'long' }) + '</p><h1 class="h1">Today</h1>' + main +
     (hist.length ? '<h2 class="h2">Recent</h2>' + hist.map(s => { const n = liftsOf(s).reduce((a, b) => a + b.sets.filter(x => x.kind === 'work' && x.done).length, 0); return '<button class="hist" data-a="openSession" data-id="' + esc(s.id) + '"><span><b>' + esc(dateTxt(s.endedAt)) + '</b> · ' + esc(s.name) + '</span><span>' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min, ' + n + ' sets</span></button>'; }).join('') : '') +
+    '<div class="tryui"><div><b>Typing layout</b><span>Pick one, then try it on a routine</span></div><div class="seg2" role="group" aria-label="Typing layout">' + ['a', 'b', 'c'].map(v => '<button class="' + ((S.settings.ui || 'a') === v ? 'on' : '') + '" data-a="ui" data-v="' + v + '" aria-pressed="' + ((S.settings.ui || 'a') === v) + '">' + v.toUpperCase() + '</button>').join('') + '</div></div>' +
     '<div class="foot"><span>' + esc(backupTxt()) + '</span><div><button data-a="backup">Backup</button><button data-a="sound" aria-pressed="' + S.settings.sound + '">Sound: ' + (S.settings.sound ? 'on' : 'off') + '</button></div></div></div>';
 }
 function editScreen() {
@@ -731,20 +760,32 @@ function summaryScreen() {
 // ---------- sheets ----------
 const stp = (label, f, val, act, extra) => '<div class="stp"><span>' + label + '</span><div class="ctl"><button class="sq" data-a="' + (act || 'ef') + '" data-f="' + f + '" data-d="-1"' + (extra || '') + ' aria-label="' + label + ', less">' + ICON.minus + '</button><b>' + val + '</b><button class="sq" data-a="' + (act || 'ef') + '" data-f="' + f + '" data-d="1"' + (extra || '') + ' aria-label="' + label + ', more">' + ICON.plus + '</button></div></div>';
 function moveRow(count, idx, canRemove) {
+  if (count <= 1 && !canRemove) return '';
+  if (count <= 1) return '<div class="moverow"><button class="rm" data-a="remove">Remove</button></div>';
   return '<div class="moverow"><button class="sq" data-a="move" data-d="-1" aria-label="Move up"' + (idx === 0 ? ' disabled' : '') + '>' + ICON.up + '</button><button class="sq" data-a="move" data-d="1" aria-label="Move down"' + (idx >= count - 1 ? ' disabled' : '') + '>' + ICON.dn + '</button>' + (canRemove ? '<button class="rm" data-a="remove">Remove</button>' : '') + '</div>';
 }
 const footBtns = '<div class="sheetfoot"><button class="cancel" data-a="cancel">Cancel</button><button class="primary" data-a="done">Done</button></div>';
+// o.form gives editors a top bar (shown in layout B); o.q is a search row (layout C moves it down onto the keyboard).
+function sheetBox(label, head, body, foot, o) {
+  o = o || {};
+  const f = o.form, tb = f ? '<div class="topbar">' + (f.cancel ? '<button class="tb-l" data-a="' + f.cancel + '">Cancel</button>' : '<span></span>') + '<b>' + esc(f.title) + '</b>' + (f.done ? '<button class="tb-r" data-a="' + f.done + '">Done</button>' : '<span></span>') + '</div>' : '';
+  return '<div class="sheet' + (o.cls ? ' ' + o.cls : '') + (f ? ' form' : '') + '" role="dialog" aria-label="' + esc(label) + '"><div class="sh-h"><div class="grab"></div>' + tb + head + '</div>' +
+    (o.q ? '<div class="sh-q">' + o.q + '</div>' : '') + (body ? '<div class="sh-b">' + body + '</div>' : '') + (foot ? '<div class="sh-f">' + foot + '</div>' : '') + '</div>';
+}
+const dockDone = '<button class="dockdone" data-a="blur">Done</button>';
 function pickSheet() {
   const sh = UI.sheet, q = sh.q || '';
   const title = sh.mode === 'swap' ? 'Change exercise' : sh.mode === 'part' ? 'Add to superset' : 'Add exercise';
-  return '<div class="sheet" role="dialog" aria-label="' + title + '"><div class="grab"></div><h2>' + title + '</h2>' +
-    '<input id="pick-q" class="sin" value="' + esc(q) + '" placeholder="Search or type a new name" aria-label="Search exercises" autocomplete="off" autocapitalize="sentences" enterkeyhint="go">' +
-    '<div class="picklist">' + pickListHtml() + '</div>' +
-    '<button class="wide" data-a="pickCancel">Cancel</button></div>';
+  return sheetBox(title, '<h2 class="t">' + title + '</h2>',
+    '<div class="picklist">' + pickListHtml() + '</div>',
+    '<button class="wide" data-a="pickCancel">Cancel</button>',
+    { cls: 'pick' + (Object.keys(S.exercises).length > 4 ? ' tall' : ''), form: { title, cancel: 'pickCancel' },
+      q: '<input id="pick-q" class="sin" value="' + esc(q) + '" placeholder="Search or type a new name" aria-label="Search exercises" autocomplete="off" autocapitalize="sentences" enterkeyhint="go">' });
 }
 function pickListHtml() {
   const q = UI.sheet.q || '', nq = norm(q);
   const all = Object.values(S.exercises).filter(x => x.name).sort((a, b) => a.name.localeCompare(b.name));
+  if (!all.length && !nq) return '<p class="pickempty">Type a name to add your first exercise.</p>';
   const list = nq ? all.filter(x => norm(x.name).includes(nq)) : all;
   const exact = nq && all.some(x => norm(x.name) === nq);
   return list.map(x => '<button class="pickrow" data-a="pickEx" data-id="' + esc(x.id) + '"><span style="flex:1;min-width:0">' + esc(x.name) + '</span>' + ICON.chev + '</button>').join('') +
@@ -756,30 +797,33 @@ function slotSheet() {
   const r = curRoutine(), count = isPart ? bl.parts.length : r.blocks.length, idx = isPart ? sh.p : sh.bi;
   const used = exUsage(t.exId).filter(n => n !== (r.name || 'Untitled routine'));
   const reps = t.range ? stp('Low', 'lo', t.lo) + stp('High', 'hi', Math.max(t.lo, t.hi || t.lo)) : stp('Reps', 'lo', t.lo);
-  return '<div class="sheet" role="dialog" aria-label="' + esc(ex.name) + '"><div class="grab"></div>' +
-    (isPart ? '<button class="txtbtn" style="margin:6px -12px 0;display:flex;align-items:center" data-a="done">' + ICON.back + 'Superset</button>' : '') +
-    '<div class="namerow"><input id="e-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" data-f="exname" value="' + esc(ex.name) + '" aria-label="Exercise name" autocomplete="off"><button data-a="swapEx">Change</button></div>' +
-    (used.length ? '<p class="dim small" style="margin-top:6px">Also in ' + esc(used.join(', ')) + '</p>' : '') +
-    '<div style="margin-top:12px">' + stp('Sets', 'sets', t.sets || 3) +
+  return sheetBox(ex.name,
+    (isPart ? '<button class="txtbtn partback" style="margin:6px -12px 0;display:flex;align-items:center" data-a="done">' + ICON.back + 'Superset</button>' : '') +
+    '<div class="dockslot" style="--h:62px"><div class="namerow dock"><input id="e-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" data-f="exname" value="' + esc(ex.name) + '" aria-label="Exercise name" autocomplete="off"><button data-a="swapEx">Change</button></div></div>' +
+    (used.length ? '<p class="dim small" style="margin-top:6px">Also in ' + esc(used.join(', ')) + '</p>' : ''),
+    '<div style="margin-top:8px">' + stp('Sets', 'sets', t.sets || 3) +
     '<div class="stp"><span>Reps</span><div class="seg2" role="group" aria-label="Fixed reps or a range"><button class="' + (t.range ? '' : 'on') + '" data-a="repMode" data-v="single" aria-pressed="' + !t.range + '">Fixed</button><button class="' + (t.range ? 'on' : '') + '" data-a="repMode" data-v="range" aria-pressed="' + !!t.range + '">Range</button></div></div>' + reps +
     (isPart ? '' : stp('Rest', 'rest', secTxt(t.rest || 0))) + stp('Warm-up sets', 'warm', t.warm || 0) + stp('Goes up by', 'step', fmt(ex.step || 2.5) + ' kg') + '</div>' +
-    moveRow(count, idx, isPart || !sh.isNew) + footBtns + '</div>';
+    moveRow(count, idx, isPart || !sh.isNew),
+    footBtns, { form: { title: isPart ? 'Superset exercise' : 'Exercise', cancel: 'cancel', done: 'done' } });
 }
 function ssSheet() {
   const sh = UI.sheet, bl = sheetBlock(), r = curRoutine(); if (!bl) return '';
   const parts = bl.parts.map((p, i) => '<button class="partrow" data-a="openPart" data-p="' + i + '"><span class="badge o" aria-hidden="true">' + LETTERS[i] + '</span><span style="flex:1;min-width:0"><b style="display:block;font-size:17px">' + esc(exName(p.exId)) + '</b><span class="dim small">' + (p.sets || 3) + ' × ' + repsTxt(p) + '</span></span>' + ICON.chev + '</button>').join('');
-  return '<div class="sheet" role="dialog" aria-label="Superset"><div class="grab"></div><h2>Superset</h2>' +
+  return sheetBox('Superset', '<h2 class="t">Superset</h2>',
     '<div style="margin-top:10px">' + parts + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addPart">' + ICON.plus + (bl.parts.length ? ' Add another' : ' Add an exercise') + '</button>' +
-    '<div style="margin-top:12px">' + stp('Rest after round', 'ssrest', secTxt(bl.rest || 0)) + '</div>' + moveRow(r.blocks.length, sh.bi, !sh.isNew) + footBtns + '</div>';
+    '<div style="margin-top:12px">' + stp('Rest after round', 'ssrest', secTxt(bl.rest || 0)) + '</div>' + moveRow(r.blocks.length, sh.bi, !sh.isNew),
+    footBtns, { form: { title: 'Superset', cancel: 'cancel', done: 'done' } });
 }
 function checkSheet() {
   const sh = UI.sheet, bl = sheetBlock(), r = curRoutine(); if (!bl) return '';
-  const items = bl.items.map((it, i) => '<div class="item"><div class="two"><input class="sin" autocapitalize="sentences" enterkeyhint="done" data-ci="' + i + '" data-cf="text" value="' + esc(it.text) + '" placeholder="Item" aria-label="Item ' + (i + 1) + '" style="flex:1.4;min-width:0"><input class="sin" autocapitalize="sentences" enterkeyhint="done" data-ci="' + i + '" data-cf="detail" value="' + esc(it.detail) + '" placeholder="2 × 15" aria-label="Item ' + (i + 1) + ' detail" style="flex:1;min-width:0"><button class="xbtn" data-a="delItem" data-i="' + i + '" aria-label="Remove item ' + (i + 1) + '">' + ICON.x + '</button></div>' +
+  const items = bl.items.map((it, i) => '<div class="item"><div class="dockslot" style="--h:48px"><div class="two dock"><input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="text" value="' + esc(it.text) + '" placeholder="Item" aria-label="Item ' + (i + 1) + '" style="flex:1.4;min-width:0"><input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="detail" value="' + esc(it.detail) + '" placeholder="2 × 15" aria-label="Item ' + (i + 1) + ' detail" style="flex:1;min-width:0"><button class="xbtn" data-a="delItem" data-i="' + i + '" aria-label="Remove item ' + (i + 1) + '">' + ICON.x + '</button></div></div>' +
     stp('Ticks', 'ticks', it.ticks || 1, 'item', ' data-i="' + i + '"').replace(/aria-label="Ticks, (less|more)"/g, (m, w) => 'aria-label="Ticks for item ' + (i + 1) + ', ' + w + '"') +
     stp('Timer', 'timer', it.timer ? it.timer + ' min' : 'Off', 'item', ' data-i="' + i + '"').replace(/aria-label="Timer, (less|more)"/g, (m, w) => 'aria-label="Timer for item ' + (i + 1) + ', ' + w + '"') + '</div>').join('');
-  return '<div class="sheet" role="dialog" aria-label="Checklist"><div class="grab"></div>' +
-    '<input id="c-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" style="margin-top:14px" data-f="cname" value="' + esc(bl.name) + '" placeholder="Checklist name" aria-label="Checklist name">' +
-    '<div style="margin-top:10px">' + items + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addItem">' + ICON.plus + ' Add an item</button>' + moveRow(r.blocks.length, sh.bi, !sh.isNew) + footBtns + '</div>';
+  return sheetBox('Checklist',
+    '<div class="dockslot" style="--h:62px;padding-top:14px"><div class="dock"><input id="c-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" data-f="cname" value="' + esc(bl.name) + '" placeholder="Checklist name" aria-label="Checklist name"></div></div>',
+    '<div style="margin-top:6px">' + items + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addItem">' + ICON.plus + ' Add an item</button>' + moveRow(r.blocks.length, sh.bi, !sh.isNew),
+    footBtns, { form: { title: 'Checklist', cancel: 'cancel', done: 'done' } });
 }
 function padSheet() {
   const sh = UI.sheet, c = S.cur, t = target(c); if (!t) return '';
@@ -794,52 +838,54 @@ function padSheet() {
   if (isKg) { const seen = []; [x.kg, ...b.sets.filter(y => y.done).map(y => y.kg), ...historyFor(b.exId, 4).flatMap(h => h.sets.map(y => y.kg))].forEach(k => { if (k != null && !seen.includes(k) && k !== val) seen.push(k); }); rec = seen.slice(0, 3); recLabel = 'Recent'; }
   else { rec = [b.lo, Math.round((b.lo + b.hi) / 2), b.hi].filter((v, i, a) => a.indexOf(v) === i); recLabel = 'Aim'; }
   const shown = sh.buf !== '' ? sh.buf : cur == null ? '—' : String(isKg ? fmt(cur) : cur);
-  return '<div class="sheet" role="dialog" aria-label="' + esc(title) + '"><div class="grab"></div>' +
-    '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;gap:8px"><span class="dim" style="font-weight:500">' + esc(title) + '</span><span class="dim small">' + (lw ? 'Last time ' + (isKg ? kgVal(lw.kg) : lw.reps) : '') + '</span></div>' +
+  return sheetBox(title,
+    '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;gap:8px"><span class="dim" style="font-weight:500">' + esc(title) + '</span><span class="dim small">' + (lw ? 'Last time ' + (isKg ? kgVal(lw.kg) : lw.reps) : '') + '</span></div>',
     '<div class="padval"><span style="color:' + (sh.buf !== '' ? 'var(--cream)' : 'var(--half)') + '">' + esc(shown) + '</span><span class="caret" aria-hidden="true"></span></div>' +
     (sh.work ? '<p class="dim small" style="text-align:center">Warm-ups are worked out from this</p>' : '') + '<div class="chips">' + chips + '</div>' +
     (rec.length ? '<div class="recent"><span class="dim small">' + recLabel + '</span>' + rec.map(k => '<button data-a="padSet" data-v="' + k + '">' + fmt(k) + '</button>').join('') + '</div>' : '') +
-    '<div class="keys">' + ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del'].map(k => k === 'del' ? '<button data-a="key" data-k="del" aria-label="Delete">' + ICON.del + '</button>' : '<button data-a="key" data-k="' + k + '"' + (k === '.' && !isKg ? ' class="off" aria-disabled="true"' : '') + (k === '.' ? ' aria-label="Decimal point"' : '') + '>' + k + '</button>').join('') + '</div>' +
-    '<button class="primary" data-a="padDone">Done</button></div>';
+    '<div class="keys">' + ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del'].map(k => k === 'del' ? '<button data-a="key" data-k="del" aria-label="Delete">' + ICON.del + '</button>' : '<button data-a="key" data-k="' + k + '"' + (k === '.' && !isKg ? ' class="off" aria-disabled="true"' : '') + (k === '.' ? ' aria-label="Decimal point"' : '') + '>' + k + '</button>').join('') + '</div>',
+    '<button class="primary" data-a="padDone">Done</button>');
 }
 function changeSheet() {
   const c = S.cur, t = target(c); if (!t || c.blocks[t.bi].kind === 'check') return '';
   const b = liftAt(c, t), x = b.sets[t.i];
-  return '<div class="sheet" role="dialog" aria-label="Change the next set"><div class="grab"></div><div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;gap:8px"><b style="font-size:17px">' + esc(b.name) + '</b><span class="dim small">' + esc(lastTxt(b, x, b.sets.slice(0, t.i).filter(y => y.kind === 'work').length)) + '</span></div>' +
-    stepsHtml(b, x) + '<button class="primary" data-a="close">Done</button></div>';
+  return sheetBox('Change the next set',
+    '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;gap:8px"><b style="font-size:17px">' + esc(b.name) + '</b><span class="dim small">' + esc(lastTxt(b, x, b.sets.slice(0, t.i).filter(y => y.kind === 'work').length)) + '</span></div>',
+    stepsHtml(b, x),
+    '<button class="primary" data-a="close">Done</button>');
 }
 function exSheet() {
   const c = S.cur, pos = UI.sheet.pos, blk = c.blocks[pos.bi]; if (!blk) return '';
   const b = blk.kind === 'ss' ? blk.parts[pos.p] : blk, ex = exById(b.exId) || { notes: '' };
   const hist = historyFor(b.exId, 6), rest = blk.rest;
-  return '<div class="sheet" role="dialog" aria-label="' + esc(b.name) + '"><div class="grab"></div><h2>' + esc(b.name) + '</h2>' +
-    '<label class="lbl" for="notes">Notes</label><textarea id="notes" data-ex="' + esc(b.exId) + '" placeholder="Cues, settings, rules">' + esc(ex.notes || '') + '</textarea>' +
+  return sheetBox(b.name, '<h2 class="t">' + esc(b.name) + '</h2>',
+    '<label class="lbl" for="notes">Notes</label><div class="dockslot" style="--h:102px"><div class="dock"><textarea id="notes" data-ex="' + esc(b.exId) + '" placeholder="Cues, settings, rules">' + esc(ex.notes || '') + '</textarea>' + dockDone + '</div></div>' +
     '<div style="margin-top:8px">' + stp(blk.kind === 'ss' ? 'Rest after round' : 'Rest', 'rest', secTxt(rest), 'restAdj').replace('data-d="-1"', 'data-d="-15"').replace('data-d="1"', 'data-d="15"') + '</div>' +
     '<label class="lbl">History</label>' +
     (hist.length ? hist.map(h => '<div class="hrow">' + esc(h.sets.map(x => x.reps).join(', ') + ' @ ' + kgVal(h.sets[0].kg) + unit(h.sets[0].kg)) + '<span>' + esc(dateTxt(h.at) + ', ' + h.name) + '</span></div>').join('') : '<p class="dim" style="margin-top:6px">Nothing yet</p>') +
-    '<button class="wide" data-a="later">Do this later</button><button class="primary" data-a="close">Done</button></div>';
+    '<button class="wide" data-a="later">Do this later</button>',
+    '<button class="primary" data-a="close">Done</button>', { form: { title: b.name, done: 'close' } });
 }
 function finishSheet() {
   let left = 0; S.cur.blocks.forEach(b => { if (b.kind !== 'check') (b.kind === 'ss' ? b.parts : [b]).forEach(p => { left += p.sets.filter(x => x.kind === 'work' && isOpen(x)).length; }); });
-  return '<div class="sheet" role="dialog" aria-label="Finish the workout"><div class="grab"></div><h2>Finish now?</h2>' + (left ? '<p class="dim" style="margin-top:6px">' + plural(left, 'set') + ' left. They’ll be saved as skipped.</p>' : '') +
-    '<button class="primary" data-a="finish">Finish workout</button><button class="wide" data-a="close">Keep going</button>' +
-    '<button class="wide danger" data-a="discard">' + (UI.confirm === 'discard' ? 'Tap again to discard' : 'Discard workout') + '</button></div>';
+  return sheetBox('Finish the workout', '<h2>Finish now?</h2>' + (left ? '<p class="dim" style="margin-top:6px">' + plural(left, 'set') + ' left. They’ll be saved as skipped.</p>' : ''), '',
+    '<button class="primary" style="margin-top:14px" data-a="finish">Finish workout</button><button class="wide" data-a="close">Keep going</button>' +
+    '<button class="wide danger" data-a="discard">' + (UI.confirm === 'discard' ? 'Tap again to discard' : 'Discard workout') + '</button>');
 }
 function sessionSheet() {
   const s = S.sessions.find(o => o.id === UI.sheet.id); if (!s) return '';
   const lines = liftsOf(s).map(b => { const d = b.sets.filter(x => x.kind === 'work' && x.done); return '<div class="hrow">' + esc(b.name) + '<span>' + esc(d.length ? d.map(setTxt).join(', ') + unit(d[0].kg) : 'skipped') + '</span></div>'; }).join('');
-  return '<div class="sheet" role="dialog" aria-label="' + esc(s.name) + '"><div class="grab"></div><h2>' + esc(s.name) + '</h2><p class="dim" style="margin-top:2px">' + esc(dateTxt(s.endedAt)) + ', ' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min</p><div style="margin-top:12px">' + lines + '</div>' +
-    '<button class="primary" data-a="close">Done</button><button class="wide danger" data-a="delSession" data-id="' + esc(s.id) + '">' + (UI.confirm === 'del' ? 'Tap again to delete' : 'Delete workout') + '</button></div>';
+  return sheetBox(s.name, '<h2>' + esc(s.name) + '</h2><p class="dim" style="margin-top:2px">' + esc(dateTxt(s.endedAt)) + ', ' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min</p>',
+    '<div style="margin-top:8px">' + lines + '</div>',
+    '<button class="primary" data-a="close">Done</button><button class="wide danger" data-a="delSession" data-id="' + esc(s.id) + '">' + (UI.confirm === 'del' ? 'Tap again to delete' : 'Delete workout') + '</button>');
 }
-
 function backupSheet() {
   const t = S.settings.lastBackup;
-  return '<div class="sheet" role="dialog" aria-label="Backup"><div class="grab"></div><h2>Backup</h2>' +
-    '<p class="dim" style="margin-top:4px">' + esc(t ? 'Last one ' + dateTxt(t) + '.' : 'No backup yet.') + ' Your workouts only live on this phone.</p>' +
-    '<button class="primary" data-a="backupSave">Download backup</button>' +
+  return sheetBox('Backup', '<h2>Backup</h2><p class="dim" style="margin-top:4px">' + esc(t ? 'Last one ' + dateTxt(t) + '.' : 'No backup yet.') + ' Your workouts only live on this phone.</p>', '',
+    '<button class="primary" style="margin-top:14px" data-a="backupSave">Download backup</button>' +
     (canShareFile() ? '<button class="wide" data-a="backupShare">Share backup…</button>' : '') +
     '<button class="wide" data-a="restorePick">Restore from a file</button><input id="restore-file" class="hidden-input" type="file" accept=".json,application/json" tabindex="-1" aria-hidden="true">' +
-    '<button class="wide" data-a="close">Close</button></div>';
+    '<button class="wide" data-a="close">Close</button>');
 }
 function sheetHtml() {
   const sh = UI.sheet; if (!sh) return '';
@@ -852,7 +898,7 @@ function sheetHtml() {
 }
 function render() {
   const prevScroll = document.getElementById('scroll'), keep = prevScroll ? prevScroll.scrollTop : 0;
-  const sheetEl = document.querySelector('.sheet'), sheetKeep = sheetEl ? sheetEl.scrollTop : 0;
+  const sheetEl = document.querySelector('.sh-b'), sheetKeep = sheetEl ? sheetEl.scrollTop : 0;
   const pageEl = document.querySelector('.paperscreen'), pageKeep = pageEl ? pageEl.scrollTop : 0, prevScreen = render.last;
   const ae = document.activeElement, focusSel = ae && ae.matches && ae.matches('input, textarea') ? (ae.id ? '#' + ae.id : ae.dataset.ci != null ? '[data-ci="' + ae.dataset.ci + '"][data-cf="' + ae.dataset.cf + '"]' : null) : null;
   let html = '', cls = '';
@@ -866,24 +912,33 @@ function render() {
     else { const b = c.blocks[t.bi]; html = '<div class="screen">' + (b.kind === 'check' ? checkScreen(c, t) : b.kind === 'ss' ? ssScreen(c, t) : liftScreen(c, t)) + '</div>'; }
   } else { UI.screen = 'today'; html = todayScreen(); cls = 'paper'; }
   const sh = sheetHtml();
-  if (sh) html += '<div class="sheetwrap"><button class="scrim" data-a="' + (UI.sheet.type === 'pick' ? 'pickCancel' : UI.screen === 'edit' ? 'cancel' : 'close') + '" aria-label="Close"></button>' + sh.replace('class="sheet"', 'class="sheet' + (UI.sheet !== render.sheetObj ? ' enter' : '') + '"') + '</div>';
+  if (sh) html += '<div class="sheetwrap"><button class="scrim" data-a="' + (UI.sheet.type === 'pick' ? 'pickCancel' : UI.screen === 'edit' ? 'cancel' : 'close') + '" aria-label="Close"></button>' + sh.replace('class="sheet', 'class="sheet' + (UI.sheet !== render.sheetObj ? ' enter' : '')) + '</div>';
   else UI.sheet = null;
   render.sheetObj = UI.sheet;
   if (UI.toast) html += '<div class="toast" role="status"><span>' + esc(UI.toast.text) + '</span>' + (UI.toast.act ? '<button data-a="' + UI.toast.act + '">Undo</button>' : '') + '</div>';
   $app.innerHTML = html;
   document.body.className = cls;
-  const tc = cls === 'paper' ? '#F7EBC4' : cls === 'resting' ? '#0B2F1D' : '#0E3A24', meta = document.querySelector('meta[name="theme-color"]');
+  document.documentElement.dataset.ui = S.settings.ui || 'a';
+  if ((S.settings.ui || 'a') === 'b' && document.querySelector('.sheet.form')) cls = 'form';
+  const tc = cls === 'form' ? '#18492F' : cls === 'paper' ? '#F7EBC4' : cls === 'resting' ? '#0B2F1D' : '#0E3A24', meta = document.querySelector('meta[name="theme-color"]');
   if (meta && meta.content !== tc) meta.content = tc;
   const sc = document.getElementById('scroll');
   if (sc) { if (UI.scrollToCard) { const card = document.getElementById('card'); if (card) card.scrollIntoView({ block: 'nearest' }); } else sc.scrollTop = keep; }
   UI.scrollToCard = false;
   const np = document.querySelector('.paperscreen'); if (np && prevScreen === UI.screen) np.scrollTop = pageKeep;
-  const ns = document.querySelector('.sheet'); if (ns && sheetEl && !ns.classList.contains('enter')) ns.scrollTop = sheetKeep;
+  const ns = document.querySelector('.sh-b'); if (ns && sheetEl && !ns.parentNode.classList.contains('enter')) ns.scrollTop = sheetKeep;
+  sheetEdges();
   render.last = UI.screen;
   let f = null;
-  if (UI.focus) { f = document.querySelector(UI.focus); UI.focus = null; }
+  let focusOnPurpose = null;
+  if (UI.focus) { f = focusOnPurpose = document.querySelector(UI.focus); UI.focus = null; }
   else if (focusSel) f = document.querySelector(focusSel);
   if (f) { try { f.focus({ preventScroll: true }); const n = f.value.length; f.setSelectionRange(n, n); } catch (e) { /* not focusable */ } }
+  if (f && f === focusOnPurpose && f.closest('.sh-b')) {
+    const add = f.closest('.item') && document.querySelector('.sh-b [data-a="addItem"]');
+    if (add) add.scrollIntoView({ block: 'nearest' }); // the new item and the button to add the next one
+    f.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 settleStale();
