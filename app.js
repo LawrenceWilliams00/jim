@@ -79,6 +79,7 @@ function migrate() {
   S.sessions.forEach(s => { if (lifts(s)) dirtyS.add(s); }); if (S.cur) lifts(S.cur);
   if (S.notes) { Object.entries(S.notes).forEach(([k, v]) => { const ex = findByName(k); if (ex && v && !ex.notes) { ex.notes = v; dirtyX.add(ex.id); } }); delete S.notes; }
   let settings = false; if (S.settings.rest) { delete S.settings.rest; settings = true; }
+  if (S.settings.ui) { delete S.settings.ui; settings = true; } // left over from trying typing layouts
   Object.keys(S.exercises).forEach(id => { if (!before.has(id)) dirtyX.add(id); });
   return { routines: [...dirtyR], exercises: [...dirtyX], sessions: [...dirtyS], settings };
 }
@@ -453,9 +454,6 @@ const A = {
   finish: () => finish(),
   discard: () => { if (UI.confirm !== 'discard') { UI.confirm = 'discard'; render(); return; } const ids = liftsOf(S.cur).map(b => b.exId); S.cur = null; pruneEx(ids); UI.sheet = null; UI.confirm = null; UI.screen = 'today'; letSleep(); touchCur(); render(); },
   summaryDone: () => { UI.screen = 'today'; UI.summary = null; render(); },
-  // which typing layout to use while comparing them
-  ui: d => { S.settings.ui = d.v; saveSettings(); render(); },
-  blur: () => { const ae = document.activeElement; if (ae && ae.blur) ae.blur(); },
   // backup
   backup: () => openSheet({ type: 'backup' }),
   backupSave: () => { const f = backupFile(), url = URL.createObjectURL(f), a = document.createElement('a'); a.href = url; a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000); markBackedUp(); },
@@ -471,8 +469,6 @@ $app.addEventListener('change', e => {
     toast(got.length ? 'Restored ' + got.join(' and ') + '.' : 'Nothing new in that backup.');
   }).catch(() => toast('That file isn’t a Jim backup.'));
 });
-// Tapping Done in a docked field mustn't take focus away first, or the bar drops out from under the finger.
-$app.addEventListener('pointerdown', e => { if (e.target.closest('.dockdone')) e.preventDefault(); });
 $app.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT') return;
   e.preventDefault();
@@ -523,6 +519,27 @@ function paintRest(root, r) {
   if (tot) tot.textContent = 'left of ' + secTxt(r.total);
 }
 setInterval(tick, 250);
+
+// ---------- Android back ----------
+// Each open screen and sheet gets a history entry, so the back gesture closes the editor you're in rather than the app.
+// Back keeps your changes, like Done; Cancel is there to throw them away.
+let hDepth = (history.state && history.state.d) || 0, ignorePop = 0;
+function syncHistory() {
+  let want = UI.screen === 'today' ? 0 : 1;
+  for (let s = UI.sheet; s; s = s.parent) want++;
+  while (hDepth < want) { hDepth++; history.pushState({ d: hDepth }, ''); }
+  if (hDepth > want) { ignorePop++; history.go(want - hDepth); hDepth = want; }
+}
+function goBack() {
+  const sh = UI.sheet;
+  if (sh) { if (UI.screen === 'edit') (sh.type === 'pick' ? A.pickCancel : A.done)(); else A.close(); return; }
+  if (UI.screen === 'edit') A.editDone(); else if (UI.screen === 'train') A.toToday(); else if (UI.screen === 'summary') A.summaryDone(); else render();
+}
+window.addEventListener('popstate', e => {
+  if (ignorePop) { ignorePop--; return; }
+  hDepth = (e.state && e.state.d) || 0;
+  goBack();
+});
 
 // Lines under a sheet's header and over its footer, only when there's something scrolled past them.
 function sheetEdges() {
@@ -708,7 +725,6 @@ function todayScreen() {
   return '<div class="screen paperscreen">' +
     '<p class="date">' + d.toLocaleDateString('en-NZ', { weekday: 'long' }) + ' ' + d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'long' }) + '</p><h1 class="h1">Today</h1>' + main +
     (hist.length ? '<h2 class="h2">Recent</h2>' + hist.map(s => { const n = liftsOf(s).reduce((a, b) => a + b.sets.filter(x => x.kind === 'work' && x.done).length, 0); return '<button class="hist" data-a="openSession" data-id="' + esc(s.id) + '"><span><b>' + esc(dateTxt(s.endedAt)) + '</b> · ' + esc(s.name) + '</span><span>' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min, ' + n + ' sets</span></button>'; }).join('') : '') +
-    '<div class="tryui"><div><b>Typing layout</b><span>Pick one, then try it on a routine</span></div><div class="seg2" role="group" aria-label="Typing layout">' + ['a', 'b', 'c'].map(v => '<button class="' + ((S.settings.ui || 'a') === v ? 'on' : '') + '" data-a="ui" data-v="' + v + '" aria-pressed="' + ((S.settings.ui || 'a') === v) + '">' + v.toUpperCase() + '</button>').join('') + '</div></div>' +
     '<div class="foot"><span>' + esc(backupTxt()) + '</span><div><button data-a="backup">Backup</button><button data-a="sound" aria-pressed="' + S.settings.sound + '">Sound: ' + (S.settings.sound ? 'on' : 'off') + '</button></div></div></div>';
 }
 function editScreen() {
@@ -764,23 +780,18 @@ function moveRow(count, idx, canRemove) {
   if (count <= 1) return '<div class="moverow"><button class="rm" data-a="remove">Remove</button></div>';
   return '<div class="moverow"><button class="sq" data-a="move" data-d="-1" aria-label="Move up"' + (idx === 0 ? ' disabled' : '') + '>' + ICON.up + '</button><button class="sq" data-a="move" data-d="1" aria-label="Move down"' + (idx >= count - 1 ? ' disabled' : '') + '>' + ICON.dn + '</button>' + (canRemove ? '<button class="rm" data-a="remove">Remove</button>' : '') + '</div>';
 }
-const footBtns = '<div class="sheetfoot"><button class="cancel" data-a="cancel">Cancel</button><button class="primary" data-a="done">Done</button></div>';
-// o.form gives editors a top bar (shown in layout B); o.q is a search row (layout C moves it down onto the keyboard).
-function sheetBox(label, head, body, foot, o) {
-  o = o || {};
-  const f = o.form, tb = f ? '<div class="topbar">' + (f.cancel ? '<button class="tb-l" data-a="' + f.cancel + '">Cancel</button>' : '<span></span>') + '<b>' + esc(f.title) + '</b>' + (f.done ? '<button class="tb-r" data-a="' + f.done + '">Done</button>' : '<span></span>') + '</div>' : '';
-  return '<div class="sheet' + (o.cls ? ' ' + o.cls : '') + (f ? ' form' : '') + '" role="dialog" aria-label="' + esc(label) + '"><div class="sh-h"><div class="grab"></div>' + tb + head + '</div>' +
-    (o.q ? '<div class="sh-q">' + o.q + '</div>' : '') + (body ? '<div class="sh-b">' + body + '</div>' : '') + (foot ? '<div class="sh-f">' + foot + '</div>' : '') + '</div>';
+// A sheet slides up from the bottom. Pass `form` instead of a footer and it's a full-screen editor with Cancel/Done in a top bar,
+// so the keyboard can take the bottom of the screen without covering anything that matters.
+function sheetBox(label, head, body, foot, form) {
+  const top = form ? '<div class="topbar">' + (form.cancel ? '<button class="tb-l" data-a="' + form.cancel + '">Cancel</button>' : '<span></span>') + '<b>' + esc(form.title) + '</b>' + (form.done ? '<button class="tb-r" data-a="' + form.done + '">Done</button>' : '<span></span>') + '</div>' : '<div class="grab"></div>';
+  return '<div class="sheet' + (form ? ' form' : '') + '" role="dialog" aria-label="' + esc(label) + '"><div class="sh-h">' + top + head + '</div>' +
+    (body ? '<div class="sh-b">' + body + '</div>' : '') + (foot && !form ? '<div class="sh-f">' + foot + '</div>' : '') + '</div>';
 }
-const dockDone = '<button class="dockdone" data-a="blur">Done</button>';
 function pickSheet() {
   const sh = UI.sheet, q = sh.q || '';
   const title = sh.mode === 'swap' ? 'Change exercise' : sh.mode === 'part' ? 'Add to superset' : 'Add exercise';
-  return sheetBox(title, '<h2 class="t">' + title + '</h2>',
-    '<div class="picklist">' + pickListHtml() + '</div>',
-    '<button class="wide" data-a="pickCancel">Cancel</button>',
-    { cls: 'pick' + (Object.keys(S.exercises).length > 4 ? ' tall' : ''), form: { title, cancel: 'pickCancel' },
-      q: '<input id="pick-q" class="sin" value="' + esc(q) + '" placeholder="Search or type a new name" aria-label="Search exercises" autocomplete="off" autocapitalize="sentences" enterkeyhint="go">' });
+  return sheetBox(title, '<input id="pick-q" class="sin" value="' + esc(q) + '" placeholder="Search or type a new name" aria-label="Search exercises" autocomplete="off" autocapitalize="sentences" enterkeyhint="go">',
+    '<div class="picklist">' + pickListHtml() + '</div>', '', { title, cancel: 'pickCancel' });
 }
 function pickListHtml() {
   const q = UI.sheet.q || '', nq = norm(q);
@@ -798,32 +809,31 @@ function slotSheet() {
   const used = exUsage(t.exId).filter(n => n !== (r.name || 'Untitled routine'));
   const reps = t.range ? stp('Low', 'lo', t.lo) + stp('High', 'hi', Math.max(t.lo, t.hi || t.lo)) : stp('Reps', 'lo', t.lo);
   return sheetBox(ex.name,
-    (isPart ? '<button class="txtbtn partback" style="margin:6px -12px 0;display:flex;align-items:center" data-a="done">' + ICON.back + 'Superset</button>' : '') +
-    '<div class="dockslot" style="--h:62px"><div class="namerow dock"><input id="e-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" data-f="exname" value="' + esc(ex.name) + '" aria-label="Exercise name" autocomplete="off"><button data-a="swapEx">Change</button></div></div>' +
+    '<div class="namerow"><input id="e-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" data-f="exname" value="' + esc(ex.name) + '" aria-label="Exercise name" autocomplete="off"><button data-a="swapEx">Change</button></div>' +
     (used.length ? '<p class="dim small" style="margin-top:6px">Also in ' + esc(used.join(', ')) + '</p>' : ''),
     '<div style="margin-top:8px">' + stp('Sets', 'sets', t.sets || 3) +
     '<div class="stp"><span>Reps</span><div class="seg2" role="group" aria-label="Fixed reps or a range"><button class="' + (t.range ? '' : 'on') + '" data-a="repMode" data-v="single" aria-pressed="' + !t.range + '">Fixed</button><button class="' + (t.range ? 'on' : '') + '" data-a="repMode" data-v="range" aria-pressed="' + !!t.range + '">Range</button></div></div>' + reps +
     (isPart ? '' : stp('Rest', 'rest', secTxt(t.rest || 0))) + stp('Warm-up sets', 'warm', t.warm || 0) + stp('Goes up by', 'step', fmt(ex.step || 2.5) + ' kg') + '</div>' +
     moveRow(count, idx, isPart || !sh.isNew),
-    footBtns, { form: { title: isPart ? 'Superset exercise' : 'Exercise', cancel: 'cancel', done: 'done' } });
+    '', { title: isPart ? 'Superset exercise' : 'Exercise', cancel: 'cancel', done: 'done' });
 }
 function ssSheet() {
   const sh = UI.sheet, bl = sheetBlock(), r = curRoutine(); if (!bl) return '';
   const parts = bl.parts.map((p, i) => '<button class="partrow" data-a="openPart" data-p="' + i + '"><span class="badge o" aria-hidden="true">' + LETTERS[i] + '</span><span style="flex:1;min-width:0"><b style="display:block;font-size:17px">' + esc(exName(p.exId)) + '</b><span class="dim small">' + (p.sets || 3) + ' × ' + repsTxt(p) + '</span></span>' + ICON.chev + '</button>').join('');
-  return sheetBox('Superset', '<h2 class="t">Superset</h2>',
-    '<div style="margin-top:10px">' + parts + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addPart">' + ICON.plus + (bl.parts.length ? ' Add another' : ' Add an exercise') + '</button>' +
+  return sheetBox('Superset', '',
+    '<div style="margin-top:4px">' + parts + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addPart">' + ICON.plus + (bl.parts.length ? ' Add another' : ' Add an exercise') + '</button>' +
     '<div style="margin-top:12px">' + stp('Rest after round', 'ssrest', secTxt(bl.rest || 0)) + '</div>' + moveRow(r.blocks.length, sh.bi, !sh.isNew),
-    footBtns, { form: { title: 'Superset', cancel: 'cancel', done: 'done' } });
+    '', { title: 'Superset', cancel: 'cancel', done: 'done' });
 }
 function checkSheet() {
   const sh = UI.sheet, bl = sheetBlock(), r = curRoutine(); if (!bl) return '';
-  const items = bl.items.map((it, i) => '<div class="item"><div class="dockslot" style="--h:48px"><div class="two dock"><input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="text" value="' + esc(it.text) + '" placeholder="Item" aria-label="Item ' + (i + 1) + '" style="flex:1.4;min-width:0"><input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="detail" value="' + esc(it.detail) + '" placeholder="2 × 15" aria-label="Item ' + (i + 1) + ' detail" style="flex:1;min-width:0"><button class="xbtn" data-a="delItem" data-i="' + i + '" aria-label="Remove item ' + (i + 1) + '">' + ICON.x + '</button></div></div>' +
+  const items = bl.items.map((it, i) => '<div class="item"><div class="two"><input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="text" value="' + esc(it.text) + '" placeholder="Item" aria-label="Item ' + (i + 1) + '" style="flex:1.4;min-width:0"><input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="detail" value="' + esc(it.detail) + '" placeholder="2 × 15" aria-label="Item ' + (i + 1) + ' detail" style="flex:1;min-width:0"><button class="xbtn" data-a="delItem" data-i="' + i + '" aria-label="Remove item ' + (i + 1) + '">' + ICON.x + '</button></div>' +
     stp('Ticks', 'ticks', it.ticks || 1, 'item', ' data-i="' + i + '"').replace(/aria-label="Ticks, (less|more)"/g, (m, w) => 'aria-label="Ticks for item ' + (i + 1) + ', ' + w + '"') +
     stp('Timer', 'timer', it.timer ? it.timer + ' min' : 'Off', 'item', ' data-i="' + i + '"').replace(/aria-label="Timer, (less|more)"/g, (m, w) => 'aria-label="Timer for item ' + (i + 1) + ', ' + w + '"') + '</div>').join('');
   return sheetBox('Checklist',
-    '<div class="dockslot" style="--h:62px;padding-top:14px"><div class="dock"><input id="c-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" data-f="cname" value="' + esc(bl.name) + '" placeholder="Checklist name" aria-label="Checklist name"></div></div>',
+    '<input id="c-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" style="margin-top:4px" data-f="cname" value="' + esc(bl.name) + '" placeholder="Checklist name" aria-label="Checklist name">',
     '<div style="margin-top:6px">' + items + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addItem">' + ICON.plus + ' Add an item</button>' + moveRow(r.blocks.length, sh.bi, !sh.isNew),
-    footBtns, { form: { title: 'Checklist', cancel: 'cancel', done: 'done' } });
+    '', { title: 'Checklist', cancel: 'cancel', done: 'done' });
 }
 function padSheet() {
   const sh = UI.sheet, c = S.cur, t = target(c); if (!t) return '';
@@ -858,13 +868,12 @@ function exSheet() {
   const c = S.cur, pos = UI.sheet.pos, blk = c.blocks[pos.bi]; if (!blk) return '';
   const b = blk.kind === 'ss' ? blk.parts[pos.p] : blk, ex = exById(b.exId) || { notes: '' };
   const hist = historyFor(b.exId, 6), rest = blk.rest;
-  return sheetBox(b.name, '<h2 class="t">' + esc(b.name) + '</h2>',
-    '<label class="lbl" for="notes">Notes</label><div class="dockslot" style="--h:102px"><div class="dock"><textarea id="notes" data-ex="' + esc(b.exId) + '" placeholder="Cues, settings, rules">' + esc(ex.notes || '') + '</textarea>' + dockDone + '</div></div>' +
+  return sheetBox(b.name, '',
+    '<label class="lbl" for="notes" style="margin-top:4px">Notes</label><textarea id="notes" data-ex="' + esc(b.exId) + '" placeholder="Cues, settings, rules">' + esc(ex.notes || '') + '</textarea>' +
     '<div style="margin-top:8px">' + stp(blk.kind === 'ss' ? 'Rest after round' : 'Rest', 'rest', secTxt(rest), 'restAdj').replace('data-d="-1"', 'data-d="-15"').replace('data-d="1"', 'data-d="15"') + '</div>' +
     '<label class="lbl">History</label>' +
     (hist.length ? hist.map(h => '<div class="hrow">' + esc(h.sets.map(x => x.reps).join(', ') + ' @ ' + kgVal(h.sets[0].kg) + unit(h.sets[0].kg)) + '<span>' + esc(dateTxt(h.at) + ', ' + h.name) + '</span></div>').join('') : '<p class="dim" style="margin-top:6px">Nothing yet</p>') +
-    '<button class="wide" data-a="later">Do this later</button>',
-    '<button class="primary" data-a="close">Done</button>', { form: { title: b.name, done: 'close' } });
+    '<button class="wide" data-a="later">Do this later</button>', '', { title: b.name, done: 'close' });
 }
 function finishSheet() {
   let left = 0; S.cur.blocks.forEach(b => { if (b.kind !== 'check') (b.kind === 'ss' ? b.parts : [b]).forEach(p => { left += p.sets.filter(x => x.kind === 'work' && isOpen(x)).length; }); });
@@ -918,8 +927,7 @@ function render() {
   if (UI.toast) html += '<div class="toast" role="status"><span>' + esc(UI.toast.text) + '</span>' + (UI.toast.act ? '<button data-a="' + UI.toast.act + '">Undo</button>' : '') + '</div>';
   $app.innerHTML = html;
   document.body.className = cls;
-  document.documentElement.dataset.ui = S.settings.ui || 'a';
-  if ((S.settings.ui || 'a') === 'b' && document.querySelector('.sheet.form')) cls = 'form';
+  if (document.querySelector('.sheet.form')) cls = 'form';
   const tc = cls === 'form' ? '#18492F' : cls === 'paper' ? '#F7EBC4' : cls === 'resting' ? '#0B2F1D' : '#0E3A24', meta = document.querySelector('meta[name="theme-color"]');
   if (meta && meta.content !== tc) meta.content = tc;
   const sc = document.getElementById('scroll');
@@ -929,6 +937,7 @@ function render() {
   const ns = document.querySelector('.sh-b'); if (ns && sheetEl && !ns.parentNode.classList.contains('enter')) ns.scrollTop = sheetKeep;
   sheetEdges();
   render.last = UI.screen;
+  syncHistory();
   let f = null;
   let focusOnPurpose = null;
   if (UI.focus) { f = focusOnPurpose = document.querySelector(UI.focus); UI.focus = null; }

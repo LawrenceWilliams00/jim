@@ -149,7 +149,7 @@ test('opens with no connection after the first visit', async ({ page, context })
 });
 
 test.describe('with the on-screen keyboard open', () => {
-  test('sheets sit above it when the page shrinks (Chrome on Android)', async ({ page }) => {
+  test('editors leave room for it when the page shrinks (Chrome on Android)', async ({ page }) => {
     const { tap } = await open(page, { seed: backup });
     await page.getByRole('button', { name: 'Edit' }).click();
     await tap('Exercise');
@@ -165,7 +165,7 @@ test.describe('with the on-screen keyboard open', () => {
     await expect(page.locator('#e-name')).toHaveValue('Bench press');
   });
 
-  test('sheets are lifted when only the visible area shrinks', async ({ page }) => {
+  test('editors end above it when only the visible area shrinks', async ({ page }) => {
     await page.addInitScript(() => {
       let kb = 0;
       const vv = new EventTarget();
@@ -200,4 +200,32 @@ test.describe('with the on-screen keyboard open', () => {
     await page.evaluate(() => window.__keyboard(0));
     await tap('Cancel');
   });
+});
+
+test('the back gesture closes what you are in, not the app', async ({ page }) => {
+  const { tap } = await open(page, { seed: backup });
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByRole('button', { name: /^Bench press/ }).click();
+  await expect(page.locator('.sheet.form')).toBeVisible();
+  await tap('Sets, more');
+  await page.goBack();
+  await expect(page.locator('.sheet')).toHaveCount(0);
+  await expect(page.locator('.blks'), 'back keeps the change, like Done').toContainText('5 × 4–6');
+
+  // Cancel closes it too, and the next back still lands one step up.
+  await tap('Exercise');
+  await tap('Cancel');
+  await expect(page.locator('.sheet')).toHaveCount(0);
+  await page.waitForTimeout(100);
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+
+  await tap('Start');
+  await page.locator('#card .val').nth(1).click();
+  await expect(page.locator('.keys')).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('.sheet')).toHaveCount(0);
+  await expect(page.locator('#card')).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
 });
