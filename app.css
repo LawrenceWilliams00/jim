@@ -54,9 +54,12 @@ button.pips { min-height: 44px; margin: -4px 0; }
 
 /* exercise header */
 .head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 14px; }
-.h1btn { display: flex; align-items: center; gap: 4px; min-height: 44px; font-size: 30px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.1; text-align: left; }
+.h1btn { display: block; min-height: 44px; padding: 5px 0; box-sizing: border-box; font-size: 30px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.1; text-align: left; }
 .h1btn.sm { font-size: 24px; letter-spacing: -0.3px; }
 .chipbtn { flex: none; height: 44px; padding: 0 14px; border-radius: 14px; background: var(--raised); display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 500; }
+/* the › rides on the last word */
+.nw { white-space: nowrap; }
+.nw svg { display: inline-block; vertical-align: -0.12em; width: 0.8em; height: 0.8em; margin-left: 2px; }
 .notebtn { flex: none; display: block; width: 100%; margin-top: 2px; text-align: left; }
 .note { font-size: 15px; line-height: 1.35; color: var(--cream-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .scroll { flex: 1; min-height: 0; overflow-y: auto; margin: 10px calc(-1 * max(var(--gut), env(safe-area-inset-right, 0px))) 0 calc(-1 * max(var(--gut), env(safe-area-inset-left, 0px))); padding: 0 max(var(--gut), env(safe-area-inset-right, 0px)) 8px max(var(--gut), env(safe-area-inset-left, 0px)); }
@@ -75,15 +78,7 @@ button.pips { min-height: 44px; margin: -4px 0; }
 .card { margin: 10px 0; padding: 12px 12px 6px; border-radius: 20px; background: var(--raised); }
 .card-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
 .card-h b { font-size: 15px; }
-.steps, .caps { display: grid; grid-template-columns: 44px minmax(34px, 1fr) 44px 14px 44px minmax(60px, 1.5fr) 44px; align-items: center; }
-.steps { margin-top: 8px; }
 .sq { width: 44px; height: 44px; border-radius: 12px; background: var(--forest); display: flex; align-items: center; justify-content: center; flex: none; }
-.val { height: 44px; display: flex; align-items: center; justify-content: center; font-size: 36px; font-weight: 700; line-height: 1; white-space: nowrap; letter-spacing: -0.5px; }
-.val.m { font-size: 30px; } .val.s { font-size: 25px; }
-.val.unset { color: var(--half); }
-.times { text-align: center; font-size: 18px; color: var(--cream-2); }
-.caps { margin-top: 4px; font-size: 13px; color: var(--cream-2); text-align: center; }
-.caps .c1 { grid-column: 1 / 4; } .caps .c2 { grid-column: 5 / 8; }
 .typebtn { height: 44px; padding: 0 10px; display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: var(--cream-2); margin: 0 auto; }
 .addbtn { height: 44px; display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 500; color: var(--cream-2); }
 .actions { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 8px; }
@@ -112,7 +107,7 @@ button.pips { min-height: 44px; margin: -4px 0; }
 .panel-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .badge { flex: none; width: 32px; height: 32px; border-radius: 16px; background: var(--cream); color: var(--forest); font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .badge.o { background: none; box-shadow: inset 0 0 0 1.5px var(--cream-2); color: var(--cream); }
-.namebtn { display: flex; align-items: center; gap: 2px; min-height: 44px; font-size: 20px; font-weight: 700; text-align: left; }
+.namebtn { display: block; min-height: 44px; padding: 10px 0; box-sizing: border-box; line-height: 1.2; font-size: 20px; font-weight: 700; text-align: left; }
 .panel-f { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; border-top: 1px solid var(--line); font-size: 13px; color: var(--cream-2); }
 .collapsed { flex: none; width: 100%; min-height: 64px; box-sizing: border-box; padding: 10px 12px; border-radius: 20px; box-shadow: inset 0 0 0 1px var(--line); display: flex; align-items: center; gap: 10px; }
 .collapsed b { display: block; font-size: 17px; }
@@ -326,6 +321,8 @@ textarea { min-height: 96px; resize: vertical; }
 .ckchip { flex: none; min-width: 56px; height: 44px; padding: 0 10px; border-radius: 22px; box-shadow: inset 0 0 0 1.5px var(--line); font-size: 15px; font-weight: 600; text-align: center; }
 .ckchip.on { background: var(--cream); color: var(--forest); box-shadow: none; }
 .item .ckmore { padding-bottom: 4px; }
+.seg2.ckkind { display: flex; margin: 4px 0 8px; }
+.seg2.ckkind button { flex: 1; }
 .item.open { padding-bottom: 6px; }
 .rmitem { height: 44px; font-size: 15px; font-weight: 600; color: var(--red); }
 /* Routine editor: one Add, the rest behind ••• */
@@ -347,6 +344,7 @@ textarea { min-height: 96px; resize: vertical; }
 /* ---------- Today ---------- */
 .eyebrow2 { margin-top: 18px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
 .hero4 { margin-top: 6px; }
+.hero4.solo { margin-top: 18px; }
 .hero4 .hn { display: block; font-size: 24px; letter-spacing: -0.3px; }
 .hero4 .hm { display: block; margin-top: 2px; font-size: 15px; color: var(--cream-2); }
 .hero4 .hx { margin-top: 12px; font-size: 15px; line-height: 1.45; color: var(--cream); }
@@ -362,6 +360,11 @@ textarea { min-height: 96px; resize: vertical; }
 .panel.hero7 { padding: 10px 14px 14px; box-shadow: inset 0 0 0 1.5px var(--line); }
 .editlbl { justify-self: end; font-size: 15px; font-weight: 700; color: var(--gold); padding-left: 8px; }
 .collapsed .editlbl { flex: none; }
+
+/* Change the next set */
+.chg-h { margin-top: 12px; }
+.chg-h b { display: block; font-size: 17px; line-height: 1.3; }
+.chg-h span { display: block; margin-top: 2px; }
 
 /* ---------- summary ---------- */
 .skipline { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--paper-line); font-size: 15px; color: var(--ink-2); line-height: 1.4; }

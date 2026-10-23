@@ -358,12 +358,19 @@ test('numbers in the editors can be typed as well as stepped', async ({ page }) 
   await add('Checklist');
   await page.keyboard.type('Bike');
   await page.locator('.ckchip').first().click();
-  await type('#v-timer-0', '5');
-  await expect(page.locator('#v-timer-0')).toHaveValue('5 min');
-  await type('#v-timer-0', '0');
-  await expect(page.locator('#v-timer-0')).toHaveValue('Off');
+  // An item is ticked or timed: only the one that applies is shown.
   await type('#v-ticks-0', '3');
   await expect(page.locator('#v-ticks-0')).toHaveValue('3');
+  await expect(page.locator('#v-timer-0')).toHaveCount(0);
+  await tap('Timer');
+  await expect(page.locator('#v-ticks-0')).toHaveCount(0);
+  await type('#v-timer-0', '8');
+  await expect(page.locator('#v-timer-0')).toHaveValue('8 min');
+  await expect(page.locator('.ckchip').first()).toHaveText('8 min');
+  await type('#v-timer-0', '0'); // a timer can't be zero; switch to Ticks for that
+  await expect(page.locator('#v-timer-0')).toHaveValue('1 min');
+  await tap('Ticks');
+  await expect(page.locator('.ckchip').first()).toHaveText('×1');
 });
 
 test('the workout list does an exercise now, skips one, and brings it back', async ({ page }) => {
@@ -475,4 +482,61 @@ test('Today shows the next routine big, the others small; the summary lists skip
   await expect(page.locator('.xr')).toHaveCount(1);
   await expect(page.locator('.paperscreen')).not.toContainText('first time');
   await expect(page.locator('.paperscreen')).not.toContainText('−100%');
+});
+
+test('Edit on the rest screen fixes the set without restarting the rest, and Cancel puts it back', async ({ page }) => {
+  const { tap } = await open(page, { seed: backup });
+  await tap('Start');
+  await tap('Log set 1');
+  await expect(page.locator('.ringwrap')).toBeVisible();
+  await page.clock.fastForward(30_000);
+  await tap('Edit the set you just logged');
+  await expect(page.locator('#card')).toContainText('Set 1, fixing');
+  await tap('One fewer rep');
+  await tap('Cancel');
+  await expect(page.locator('.lines')).toContainText('Set 1: 4 × 62.5');
+  await expect(page.locator('.ringtxt .big'), 'the rest kept counting').not.toHaveText('3:00');
+  await tap('Edit the set you just logged');
+  await tap('One fewer rep');
+  await tap('Save');
+  await expect(page.locator('.lines')).toContainText('Set 1: 3 × 62.5');
+
+  // Changing the next set uses the same big numbers, and typing one comes back to the sheet.
+  await tap('Change the next set');
+  await expect(page.locator('.sheet .fnums')).toBeVisible();
+  await expect(page.locator('.sheet')).not.toContainText('no last time');
+  await page.locator('.sheet .fval').first().click();
+  await tap('6'); await tap('Done');
+  await expect(page.getByRole('dialog', { name: 'Change the next set' })).toBeVisible();
+  await tap('Done');
+  await expect(page.locator('.lines')).toContainText('set 2, 6 × 62.5');
+});
+
+test('a new exercise reads cleanly before it has a weight, and the summary keeps the order things were done', async ({ page }) => {
+  const seed = JSON.parse(backup);
+  seed.exercises['x-row'] = { id: 'x-row', name: 'Seated row', step: 2.5, notes: '', updatedAt: 1 };
+  seed.routines[0].blocks.push({ kind: 'lift', exId: 'x-row', sets: 3, lo: 10, hi: 12, range: true, rest: 0, warm: 0 });
+  const { tap } = await open(page, { seed: JSON.stringify(seed) });
+  await tap('Start');
+  await page.locator('button.pips').click();
+  await tap('Seated row: do it now');
+  await expect(page.locator('.row.pending').first()).toContainText('10 reps');
+  await expect(page.locator('#scroll')).not.toContainText('— ×');
+  await tap('Set a weight');
+  await expect(page.locator('.sheet .chips'), 'no ± chips until there is a number').toBeHidden();
+  await tap('4');
+  await expect(page.locator('.sheet .chips')).toBeVisible();
+  await tap('0'); await tap('Done');
+  await tap('Log set 1');
+  await page.clock.fastForward(5_000);
+  await page.locator('button.pips').click();
+  await tap('Bench press: do it now');
+  await tap('Log set 1');
+  await tap('Finish'); await tap('Finish workout');
+  await expect(page.locator('.xr').nth(0)).toContainText('Seated row');
+  await expect(page.locator('.xr').nth(1)).toContainText('Bench press');
+  await tap('Done');
+  await page.locator('.hist').first().click();
+  await expect(page.locator('.sheet .hrow').nth(0)).toContainText('Seated row10 @ 40 kg');
+  await expect(page.locator('.sheet .hrow').nth(1)).toContainText('4 @ 62.5 kg');
 });

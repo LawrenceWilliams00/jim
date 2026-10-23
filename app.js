@@ -272,13 +272,12 @@ function logSet() {
   if (rest > 0) { c.rest = { endsAt: now() + rest * 1000, total: rest, from: t }; UI.toast = null; touchCur(); render(); return; }
   c.rest = null; UI.scrollToCard = true; touchCur(); render();
 }
-function undoLast() {
-  const c = S.cur, t = UI.lastLog || (c && c.rest && c.rest.from); if (!c || !t) return;
-  const b = liftAt(c, t); if (!b || !b.sets[t.i]) return;
-  b.sets[t.i].done = false; c.rest = null; c.over = null;
-  c.pick = c.blocks[t.bi].kind === 'ss' ? { bi: t.bi, p: t.p } : null;
-  UI.lastLog = null; UI.toast = null; UI.scrollToCard = true; touchCur(); render();
+// Start fixing a logged set, remembering what it was so Cancel can put it back.
+function fixSet(pos) {
+  const x = liftAt(S.cur, pos).sets[pos.i];
+  S.cur.fix = Object.assign({}, pos, { was: { reps: x.reps, kg: x.kg, type: x.type || 0, touched: !!x.touched } });
 }
+const padParent = () => (UI.sheet && UI.sheet.type === 'change' ? UI.sheet : null);
 function skipSet() {
   const c = S.cur, t = nextOpen(c); if (!t) return;
   const b = c.blocks[t.bi];
@@ -358,7 +357,7 @@ const A = {
   toToday: () => { UI.screen = 'today'; UI.sheet = null; if (S.cur) S.cur.fix = null; render(); },
   openSession: d => openSheet({ type: 'session', id: d.id }),
   delSession: d => { if (UI.confirm !== 'del') { UI.confirm = 'del'; render(); return; } deleteSession(d.id); UI.sheet = null; UI.confirm = null; render(); },
-  close: () => { UI.sheet = null; UI.confirm = null; render(); },
+  close: () => { UI.sheet = (UI.sheet && UI.sheet.parent) || null; UI.confirm = null; render(); },
   // routines
   newRoutine: () => { const r = { id: uid('r'), name: '', order: Math.max(0, ...S.routines.map(x => x.order || 0)) + 1, blocks: [], updatedAt: now() }; S.routines.push(r); saveRoutine(r); UI.editId = r.id; UI.sel = r.id; UI.screen = 'edit'; UI.focus = '#r-name'; render(); },
   editRoutine: d => { UI.editId = d.id; UI.screen = 'edit'; UI.sheet = null; render(); },
@@ -395,7 +394,8 @@ const A = {
     else if (f === 'step') { const ex = exById(t.exId); if (ex) { const cur = ex.step || 2.5; ex.step = dv > 0 ? (STEPS.find(x => x > cur + 1e-9) || STEPS[STEPS.length - 1]) : (STEPS.slice().reverse().find(x => x < cur - 1e-9) || STEPS[0]); saveEx(ex); } }
     changed(); },
   repMode: d => { const t = sheetSlot(); if (!t) return; t.range = d.v === 'range'; if (t.range && (t.hi || 0) <= t.lo) t.hi = t.lo + 2; S.settings.rangeMode = t.range; saveSettings(); changed(); },
-  item: d => { const bl = sheetBlock(); if (!bl) return; const it = bl.items[+d.i]; if (d.f === 'ticks') it.ticks = clamp((it.ticks || 1) + +d.d, 1, 6); if (d.f === 'timer') it.timer = clamp((it.timer || 0) + +d.d, 0, 60); changed(); },
+  item: d => { const bl = sheetBlock(); if (!bl) return; const it = bl.items[+d.i]; if (d.f === 'ticks') it.ticks = clamp((it.ticks || 1) + +d.d, 1, 6); if (d.f === 'timer') it.timer = clamp((it.timer || 0) + +d.d, 1, 60); changed(); },
+  itemKind: d => { const bl = sheetBlock(); if (!bl) return; const it = bl.items[+d.i]; if (d.v === 'timer') { it.timer = it.timer || 5; it.ticks = 1; } else it.timer = 0; changed(); },
   addItem: () => { const bl = sheetBlock(); bl.items.push({ text: '', detail: '', ticks: 1, timer: 0 }); UI.focus = '[data-ci="' + (bl.items.length - 1) + '"][data-cf="text"]'; changed(); },
   delItem: d => { const bl = sheetBlock(); bl.items.splice(+d.i, 1); changed(); },
   remove: () => {
@@ -432,12 +432,15 @@ const A = {
   kgDn: () => edit((x, b) => { x.kg = x.kg == null ? null : Math.max(0, r2(x.kg - b.step)); }),
   kgUp: () => edit((x, b) => { x.kg = x.kg == null ? b.step : r2(x.kg + b.step); }),
   type: () => edit(x => { x.type = ((x.type || 0) + 1) % TYPES.length; }),
-  padReps: () => openSheet({ type: 'pad', field: 'reps', buf: '' }),
-  padKg: () => openSheet({ type: 'pad', field: 'kg', buf: '', work: needsWork() }),
-  row: d => { const c = S.cur, pos = { bi: +d.bi, i: +d.i }; if (d.p != null && d.p !== '') pos.p = +d.p; const x = liftAt(c, pos).sets[pos.i]; if (x.done) c.fix = c.fix && c.fix.bi === pos.bi && c.fix.i === pos.i && c.fix.p === pos.p ? null : pos; else { x.skipped = false; c.fix = null; } UI.scrollToCard = true; touchCur(); render(); },
+  // from the Change sheet, the pad goes back to it when done
+  padReps: () => openSheet({ type: 'pad', field: 'reps', buf: '', parent: padParent() }),
+  padKg: () => openSheet({ type: 'pad', field: 'kg', buf: '', work: needsWork(), parent: padParent() }),
+  row: d => { const c = S.cur, pos = { bi: +d.bi, i: +d.i }; if (d.p != null && d.p !== '') pos.p = +d.p; const x = liftAt(c, pos).sets[pos.i]; if (x.done) { if (c.fix && c.fix.bi === pos.bi && c.fix.i === pos.i && c.fix.p === pos.p) c.fix = null; else fixSet(pos); } else { x.skipped = false; c.fix = null; } UI.scrollToCard = true; touchCur(); render(); },
+  // Edit on the rest screen: fix the set while the rest keeps counting; Save or Cancel goes back to it.
+  restEdit: () => { const c = S.cur, f = c.rest && c.rest.from; if (!f) return; fixSet(f); UI.scrollToCard = true; touchCur(); render(); },
+  fixCancel: () => { const c = S.cur, f = c.fix; if (!f) return; const b = liftAt(c, f), x = b.sets[f.i]; if (f.was) Object.assign(x, f.was); refreshWarm(b); c.fix = null; touchCur(); render(); },
   log: () => logSet(),
   skip: () => skipSet(),
-  undo: () => undoLast(),
   add: () => { const c = S.cur, t = target(c); if (!t) return; const b = liftAt(c, t), src = b.sets[b.sets.length - 1]; b.sets.push({ kind: 'work', reps: src.reps, kg: src.kg, done: false, skipped: false, touched: false, type: 0 }); touchCur(); render(); },
   plan: () => openSheet({ type: 'plan' }),
   slotMore: () => { UI.slotMore = true; render(); },
@@ -459,7 +462,7 @@ const A = {
   // number pad
   key: d => { const sh = UI.sheet; if (!sh) return; let buf = sh.buf; const k = d.k; if (k === 'del') buf = buf.slice(0, -1); else if (k === '.') { if (sh.field === 'reps' || buf.includes('.')) return; buf = (buf || '0') + '.'; } else { if (buf.replace('.', '').length >= 5) return; buf = buf === '0' ? k : buf + k; } sh.buf = buf; render(); },
   padSet: d => { UI.sheet.buf = fmt(Math.max(0, +d.v)); render(); },
-  padDone: () => { const sh = UI.sheet, c = S.cur, t = target(c), v = parseFloat(sh.buf); UI.sheet = null; if (t && sh.buf !== '' && !isNaN(v)) { const b = liftAt(c, t), x = b.sets[t.i]; if (sh.work) b.sets.forEach(y => { if (y.kind === 'work' && isOpen(y)) y.kg = r2(v); }); else if (sh.field === 'reps') { x.reps = Math.round(v); x.touched = true; } else { x.kg = r2(v); x.touched = true; } refreshWarm(b); touchCur(); } render(); },
+  padDone: () => { const sh = UI.sheet, c = S.cur, t = target(c), v = parseFloat(sh.buf); UI.sheet = sh.parent || null; if (t && sh.buf !== '' && !isNaN(v)) { const b = liftAt(c, t), x = b.sets[t.i]; if (sh.work) b.sets.forEach(y => { if (y.kind === 'work' && isOpen(y)) y.kg = r2(v); }); else if (sh.field === 'reps') { x.reps = Math.round(v); x.touched = true; } else { x.kg = r2(v); x.touched = true; } refreshWarm(b); touchCur(); } render(); },
   // exercise info during training
   openEx: d => { const pos = { bi: +d.bi }; if (d.p != null && d.p !== '') pos.p = +d.p; openSheet({ type: 'ex', pos }); },
   restAdj: d => { setTrainRest((S.cur.blocks[UI.sheet.pos.bi].rest || 0) + +d.d); render(); },
@@ -542,7 +545,7 @@ $app.addEventListener('input', e => {
 const typing = () => { const ae = document.activeElement; return !!(ae && ae.matches && ae.matches('input, textarea')); };
 function tick() {
   const c = S.cur; let changedNow = false;
-  if (c && c.rest && now() >= c.rest.endsAt) { c.over = { since: c.rest.endsAt }; c.rest = null; changedNow = true; if (UI.sheet && UI.sheet.type === 'change') UI.sheet = null; if (document.visibilityState === 'visible' && now() - c.over.since < 3000) beep(); UI.scrollToCard = true; }
+  if (c && c.rest && now() >= c.rest.endsAt) { c.over = { since: c.rest.endsAt }; c.rest = null; changedNow = true; if (UI.sheet && UI.sheet.type === 'change') UI.sheet = null; else if (UI.sheet && UI.sheet.parent && UI.sheet.parent.type === 'change') UI.sheet.parent = null; if (document.visibilityState === 'visible' && now() - c.over.since < 3000) beep(); UI.scrollToCard = true; }
   if (c && c.cardio && now() >= c.cardio.endsAt) { const it = c.blocks[c.cardio.bi] && c.blocks[c.cardio.bi].items[c.cardio.it]; if (it) it.ticks = it.ticks.map(() => true); const late = now() - c.cardio.endsAt; c.cardio = null; changedNow = true; if (late < 3000) beep(); }
   if (changedNow) { touchCur(); if (UI.screen !== 'edit' && !typing()) render(); return; } // while typing, the next tap brings the screen up to date
   document.querySelectorAll('[data-tick]').forEach(el => {
@@ -704,23 +707,6 @@ function topHtml(c, resting) {
     '<button class="txtbtn" data-a="askFinish">Finish</button></div>' + pipsHtml(c, resting);
 }
 const overHtml = c => (c.over ? '<div class="over" role="status"><span>' + ICON.timer + 'Rest is up, you’re on</span><span data-tick="over">' + mmss(now() - c.over.since) + ' over</span></div>' : '');
-function stepsHtml(b, x) {
-  const v = kgVal(x.kg), cls = v.length >= 5 ? ' s' : v.length >= 4 ? ' m' : '';
-  const c1 = x.kind === 'warm' ? (x.frac === 'easy' ? 'easy reps' : Math.round(x.frac * 100) + '% of ' + (workKg(b) == null ? 'working' : kgVal(workKg(b)) + unit(workKg(b)))) : 'reps, aim ' + range(b.lo, b.hi);
-  const c2 = x.kg == null ? (x.kind === 'warm' ? 'set working weight' : 'set a weight') : x.kg === 0 ? 'bodyweight' : 'kg';
-  return '<div class="steps"><button class="sq" data-a="repsDn" aria-label="One fewer rep">' + ICON.minus + '</button>' +
-    '<button class="val" data-a="padReps" aria-label="Reps: ' + x.reps + ', tap to type">' + x.reps + '</button>' +
-    '<button class="sq" data-a="repsUp" aria-label="One more rep">' + ICON.plus + '</button><span class="times" aria-hidden="true">×</span>' +
-    '<button class="sq" data-a="kgDn" aria-label="Less weight">' + ICON.minus + '</button>' +
-    '<button class="val' + cls + (x.kg == null ? ' unset' : '') + '" data-a="padKg" aria-label="Weight: ' + esc(v) + ', tap to type">' + esc(v) + '</button>' +
-    '<button class="sq" data-a="kgUp" aria-label="More weight">' + ICON.plus + '</button></div>' +
-    '<div class="caps"><span class="c1">' + esc(c1) + '</span><span class="c2">' + c2 + '</span></div>';
-}
-function lastTxt(b, x, wi) {
-  if (x.kind === 'warm') return x.frac === 'easy' ? 'easy' : Math.round(x.frac * 100) + '%';
-  const last = lastFor(b.exId, b.lo, b.hi), lw = last && last.all.filter(y => y.done)[wi];
-  return lw ? 'last ' + setTxt(lw) : 'no last time';
-}
 // ---------- the lift screen ----------
 function lastSet(b, wi) { const last = lastFor(b.exId, b.lo, b.hi); return last ? last.all.filter(y => y.done)[wi] || null : null; }
 function setLabel(b, i) { const x = b.sets[i], n = b.sets.slice(0, i + 1).filter(y => y.kind === x.kind).length; return (x.kind === 'warm' ? 'Warm-up ' : 'Set ') + n; }
@@ -747,19 +733,21 @@ function setRows(c, t, b, card) {
     const just = UI.lastLog && UI.lastLog.bi === t.bi && UI.lastLog.i === i && UI.lastLog.p == null;
     if (x.done && !isCur) out += '<button class="' + cls + '" data-a="row" data-bi="' + t.bi + '" data-i="' + i + '" aria-label="' + label + ', ' + esc(setTxt(x)) + '. Tap to edit"><span class="rl">' + label + '</span><span class="rv">' + esc(setTxt(x)) + kg + '</span><span class="rlast"></span>' + (just ? '<span class="editlbl">Edit</span>' : ICON.check) + '</button>';
     else if (x.skipped && !isCur) out += '<button class="' + cls + ' pending" data-a="row" data-bi="' + t.bi + '" data-i="' + i + '" aria-label="' + label + ' skipped. Tap to do it"><span class="rl">' + label + '</span><span class="rv">Skipped</span><span class="rlast">tap to do it</span><span></span></button>';
-    else out += '<div class="' + cls + (isCur ? '' : ' pending') + '"' + id + '><span class="rl">' + label + '</span><span class="rv">' + (isCur ? x.reps : '—') + ' × ' + esc(kgVal(x.kg)) + kg + '</span><span class="rlast">' + esc(isCur ? '' : lastLine(b, x, i)) + '</span><span></span></div>';
+    else out += '<div class="' + cls + (isCur ? '' : ' pending') + '"' + id + '><span class="rl">' + label + '</span><span class="rv">' + (x.kg == null ? esc(plural(x.reps, 'rep')) : x.reps + ' × ' + esc(kgVal(x.kg)) + kg) + '</span><span class="rlast">' + esc(isCur ? '' : lastLine(b, x, i)) + '</span><span></span></div>';
   });
   return out;
 }
+// A name with › after its last word, so the arrow wraps with the word instead of sitting off at the edge.
+function chevName(name) { const k = name.lastIndexOf(' ') + 1; return esc(name.slice(0, k)) + '<span class="nw">' + esc(name.slice(k)) + ICON.chev + '</span>'; }
 function liftHead(c, t, b) {
   const ex = exById(b.exId), note = ex && ex.notes;
-  return '<div class="head"><h1><button class="h1btn' + (b.name.length > 14 ? ' sm' : '') + '" data-a="openEx" data-bi="' + t.bi + '">' + esc(b.name) + ICON.chev + '</button></h1></div>' +
+  return '<div class="head"><h1><button class="h1btn' + (b.name.length > 14 ? ' sm' : '') + '" data-a="openEx" data-bi="' + t.bi + '">' + chevName(b.name) + '</button></h1></div>' +
     (note ? '<button class="notebtn" data-a="openEx" data-bi="' + t.bi + '" aria-label="Notes: ' + esc(note) + '. Tap to edit"><span class="note">' + esc(note) + '</span></button>' : '');
 }
 function liftActions(c, b, t) {
   const tx = b.sets[t.i];
   const label = c.fix ? 'Save' : tx.kg == null ? 'Set a weight' : 'Log ' + (tx.kind === 'warm' ? 'warm-up ' : 'set ') + b.sets.slice(0, t.i + 1).filter(y => y.kind === tx.kind).length;
-  return '<div class="actions">' + (c.fix ? '' : '<button class="skip" data-a="skip">Skip</button>') + '<button class="primary" data-a="log">' + label + '</button></div>';
+  return '<div class="actions">' + (c.fix ? '<button class="skip" data-a="fixCancel">Cancel</button>' : '<button class="skip" data-a="skip">Skip</button>') + '<button class="primary" data-a="log">' + label + '</button></div>';
 }
 // The set you're on: big numbers you can tap to type, with − and + under each.
 function bigSet(b, x) {
@@ -784,10 +772,10 @@ function ssScreen(c, t) {
     const letter = LETTERS[pi], x = p.sets[r];
     if (pi === cp) {
       const lw = lastSet(p, r);
-      return '<section class="panel hero7" id="card" aria-label="' + letter + ', ' + esc(p.name) + (fx ? ', editing' : ', now') + '"><div class="panel-h"><div style="display:flex;align-items:center;gap:10px;min-width:0"><span class="badge" aria-hidden="true">' + letter + '</span><h2 style="margin:0;min-width:0"><button class="namebtn" data-a="openEx" data-bi="' + t.bi + '" data-p="' + pi + '">' + esc(p.name) + ICON.chev + '</button></h2></div>' +
+      return '<section class="panel hero7" id="card" aria-label="' + letter + ', ' + esc(p.name) + (fx ? ', editing' : ', now') + '"><div class="panel-h"><div style="display:flex;align-items:center;gap:10px;min-width:0"><span class="badge" aria-hidden="true">' + letter + '</span><h2 style="margin:0;min-width:0"><button class="namebtn" data-a="openEx" data-bi="' + t.bi + '" data-p="' + pi + '">' + chevName(p.name) + '</button></h2></div>' +
         '<span class="dim small" style="flex:none">' + esc(fx ? 'editing' : lw ? 'last ' + setTxt(lw) + unit(lw.kg) : '') + '</span></div>' + bigSet(p, x) + '</section>';
     }
-    const sub = !x ? 'No set this round' : x.done ? 'Done: ' + setTxt(x) + unit(x.kg) : x.skipped ? 'Skipped' : 'Up next: ' + setTxt(x) + unit(x.kg);
+    const sub = !x ? 'No set this round' : x.done ? 'Done: ' + setTxt(x) + unit(x.kg) : x.skipped ? 'Skipped' : 'Up next: ' + (x.kg == null ? plural(x.reps, 'rep') : setTxt(x) + unit(x.kg));
     const head = '<span class="badge o" aria-hidden="true">' + letter + '</span><span style="flex:1;min-width:0"><b>' + esc(p.name) + '</b><span class="sub">' + esc(sub) + '</span></span>';
     if (x && x.done && !fx) {
       const just = UI.lastLog && UI.lastLog.bi === t.bi && UI.lastLog.p === pi && UI.lastLog.i === r;
@@ -804,7 +792,7 @@ function ssScreen(c, t) {
     '<div class="sshead"><div><div class="eyebrow">' + ICON.link + 'Superset</div><h1 class="h1" style="margin-top:4px">Round ' + (r + 1) + ' of ' + R + '</h1></div></div>' +
     '<div class="scroll" id="scroll" style="margin-top:14px">' + panels.join('<div class="link" aria-hidden="true"><i></i>no rest</div>') +
     '<p class="dim small" style="padding-top:10px">' + esc(note) + '</p></div>' +
-    '<div class="actions" style="padding-top:12px">' + (fx ? '' : '<button class="skip" data-a="skip">Skip</button>') + '<button class="primary" data-a="log">' + (fx ? 'Save' : tx.kg == null ? 'Set a weight' : 'Log ' + esc(blk.parts[cp].name)) + '</button></div>';
+    '<div class="actions" style="padding-top:12px">' + (fx ? '<button class="skip" data-a="fixCancel">Cancel</button>' : '<button class="skip" data-a="skip">Skip</button>') + '<button class="primary" data-a="log">' + (fx ? 'Save' : tx.kg == null ? 'Set a weight' : 'Log ' + esc(blk.parts[cp].name)) + '</button></div>';
 }
 function checkScreen(c, t) {
   const b = c.blocks[t.bi];
@@ -837,13 +825,13 @@ function restScreen(c) {
   const canChange = nx && c.blocks[nx.bi].kind !== 'check';
   const logged = x.kind === 'warm' ? 'Warm-up ' + warmIdx + ': <b>' + esc(setTxt(x)) + unit(x.kg) + '</b>' : 'Set ' + (workIdx + 1) + ': <b>' + esc(setTxt(x)) + unit(x.kg) + '</b>, <span style="color:' + (cmp.good ? 'var(--gold)' : 'var(--cream-2)') + ';font-weight:500">' + esc(cmp.txt) + '</span>';
   return topHtml(c, true) +
-    '<div class="head" style="padding-top:12px"><h1><button class="h1btn sm" data-a="openEx" data-bi="' + from.bi + '"' + (from.p != null ? ' data-p="' + from.p + '"' : '') + '>' + esc(b.name) + ICON.chev + '</button></h1></div>' +
+    '<div class="head" style="padding-top:12px"><h1><button class="h1btn sm" data-a="openEx" data-bi="' + from.bi + '"' + (from.p != null ? ' data-p="' + from.p + '"' : '') + '>' + chevName(b.name) + '</button></h1></div>' +
     '<div style="flex:1;min-height:8px"></div>' +
     '<div class="ringwrap" data-tick="rest"><svg viewBox="0 0 300 300" aria-hidden="true"><circle cx="150" cy="150" r="140" fill="none" stroke="var(--track)" stroke-width="14"/><circle class="arc" cx="150" cy="150" r="140" fill="none" stroke-width="14" stroke-linecap="round" stroke-dasharray="879.6" stroke-dashoffset="' + r2(879.6 * (1 - frac)) + '" transform="rotate(-90 150 150)" style="stroke:' + col + '"/><circle class="knob" cx="150" cy="10" r="12" stroke="var(--rest)" stroke-width="4" style="fill:' + col + ';transform:rotate(' + r2(360 * frac) + 'deg);transform-origin:150px 150px"/></svg>' +
     '<div class="ringtxt" role="timer"><div class="big" style="color:' + col + '">' + mmss(left) + '</div><div class="dim tot" style="font-size:17px;margin-top:6px">left of ' + secTxt(r.total) + '</div></div></div>' +
     '<div class="adjust"><button data-a="restLess" aria-label="15 seconds less rest">−15 s</button><button data-a="restMore" aria-label="15 seconds more rest">+15 s</button></div>' +
     '<div style="flex:1;min-height:8px"></div>' +
-    '<div class="lines"><div class="line"><span class="okdot">' + ICON.check + '</span><span class="t">' + logged + '</span>' + (pr ? '<span class="prtag">PR</span>' : '') + '<button class="ltxt" data-a="undo">Undo</button></div>' +
+    '<div class="lines"><div class="line"><span class="okdot">' + ICON.check + '</span><span class="t">' + logged + '</span>' + (pr ? '<span class="prtag">PR</span>' : '') + '<button class="ltxt" data-a="restEdit" aria-label="Edit the set you just logged">Edit</button></div>' +
     (nx ? '<div class="line"><span class="t"><span class="dim">Next:</span> ' + nextLine + '</span>' + (canChange ? '<button class="ltxt" data-a="change" aria-label="Change the next set">Change' + ICON.chev + '</button>' : '') + '</div>' : '') + '</div>' +
     '<div class="actions" style="padding-top:16px"><button class="primary" data-a="skipRest">Skip rest</button></div>';
 }
@@ -858,7 +846,7 @@ function todayScreen() {
   else if (!rs.length) main = '<button class="ghost ink" style="margin-top:16px;height:56px" data-a="newRoutine">' + ICON.plus + 'New routine</button>';
   else {
     const others = rs.filter(r => r !== sel);
-    main = '<p class="eyebrow2">' + (sel === sug ? 'Next up' : 'Picked') + '</p><div class="wcard hero4"><b class="hn">' + esc(sel.name || 'Untitled routine') + '</b><span class="hm">' + esc(routineSummary(sel)) + '</span>' +
+    main = (sel === sug ? '<p class="eyebrow2">Next up</p><div class="wcard hero4">' : '<div class="wcard hero4 solo">') + '<b class="hn">' + esc(sel.name || 'Untitled routine') + '</b><span class="hm">' + esc(routineSummary(sel)) + '</span>' +
       '<p class="hx">' + esc((sel.blocks || []).map(blockName).join(' · ') || 'Empty') + '</p>' +
       '<div class="cardbtns"><button class="ghost" data-a="editRoutine" data-id="' + esc(sel.id) + '">Edit</button><button class="primary" data-a="start">Start</button></div></div>' +
       (others.length ? '<h2 class="h2 sm">Other routines</h2><div class="others">' + others.map(r => '<button class="orow" data-a="pickRoutine" data-id="' + esc(r.id) + '"><span style="min-width:0"><b>' + esc(r.name || 'Untitled routine') + '</b><span class="sub">' + esc(routineSummary(r)) + '</span></span>' + (r === sug ? '<span class="tag">Next</span>' : '') + ICON.chev + '</button>').join('') + '</div>' : '') +
@@ -885,12 +873,22 @@ function editScreen() {
     (rows ? '<div class="blks" data-drag-list="blocks">' + rows + '</div>' + (r.blocks.length > 1 ? '<p class="draghint">Hold and drag to reorder</p>' : '') : '') +
     '<button class="addone" data-a="addMenu">' + ICON.plus + 'Add</button></div>';
 }
+// Exercises in the order they were done (Do now can change it), by each one's first logged set.
+function liftsInOrderDone(s) {
+  const first = b => Math.min(Infinity, ...b.sets.filter(x => x.done && x.at).map(x => x.at));
+  return liftsOf(s).map((b, k) => [b, first(b), k]).sort((p, q) => (p[1] - q[1]) || (p[2] - q[2])).map(p => p[0]);
+}
+// "6, 6, 5 @ 110 kg" when the weight held; each set written out when it didn't.
+function setsLine(dn) {
+  const kgs = [...new Set(dn.map(x => x.kg))];
+  return kgs.length === 1 ? dn.map(x => x.reps).join(', ') + ' @ ' + kgVal(kgs[0]) + unit(kgs[0]) : dn.map(setTxt).join(', ') + (dn.some(x => x.kg) ? ' kg' : '');
+}
 function summaryScreen() {
   const s = UI.summary; if (!s) return todayScreen();
   let vol = 0, lastVol = 0, sets = 0, skipped = 0;
   const rows = [], prs = [], skippedNames = [];
   const prev = S.sessions.filter(o => o.id !== s.id).sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
-  liftsOf(s).forEach(b => {
+  liftsInOrderDone(s).forEach(b => {
     const work = b.sets.filter(x => x.kind === 'work'), dn = work.filter(x => x.done);
     sets += dn.length; skipped += work.filter(x => x.skipped).length;
     const v = dn.reduce((a, x) => a + x.reps * (x.kg || 0), 0); vol += v;
@@ -898,8 +896,7 @@ function summaryScreen() {
     for (const o of prev) { const m = liftsOf(o).find(y => y.exId === b.exId && y.lo === b.lo && y.hi === b.hi); if (m) { const d = m.sets.filter(x => x.kind === 'work' && x.done); if (d.length) { lv = d.reduce((a, x) => a + x.reps * (x.kg || 0), 0); break; } } }
     prev.forEach(o => liftsOf(o).forEach(y => { if (y.exId === b.exId) y.sets.forEach(x => { if (x.kind === 'work' && x.done) best = Math.max(best, e1(x.reps, x.kg)); }); }));
     lastVol += lv;
-    const kgs = [...new Set(dn.map(x => x.kg))];
-    const detail = !dn.length ? 'Skipped' : kgs.length === 1 ? dn.map(x => x.reps).join(', ') + ' @ ' + kgVal(kgs[0]) + unit(kgs[0]) : dn.map(setTxt).join(', ');
+    const detail = setsLine(dn);
     const pct = lv ? Math.round(((v - lv) / lv) * 100) : null;
     if (!dn.length) { skippedNames.push(b.name); return; }
     rows.push({ name: b.name, detail, vol: !dn.length ? '' : !v ? dn.reduce((a, x) => a + x.reps, 0) + ' reps' : Math.round(v).toLocaleString('en-NZ') + ' kg', cmp: pct == null ? '' : pct === 0 ? 'same' : (pct > 0 ? '+' : '−') + Math.abs(pct) + '%', up: pct > 0 });
@@ -965,7 +962,7 @@ function setSlotField(f, v) {
   else if (f === 'step') { const ex = exById(t.exId); if (ex) { ex.step = clamp(r2(v), 0.25, 50); saveEx(ex); } }
   saveRoutine(curRoutine());
 }
-function setItemField(i, f, v) { const bl = sheetBlock(); if (!bl) return; const it = bl.items[i]; if (f === 'ticks') it.ticks = clamp(Math.round(v), 1, 6); if (f === 'timer') it.timer = clamp(Math.round(v), 0, 60); saveRoutine(curRoutine()); }
+function setItemField(i, f, v) { const bl = sheetBlock(); if (!bl) return; const it = bl.items[i]; if (f === 'ticks') it.ticks = clamp(Math.round(v), 1, 6); if (f === 'timer') it.timer = clamp(Math.round(v), 1, 60); saveRoutine(curRoutine()); }
 function setTrainRest(v) {
   const blk = S.cur.blocks[UI.sheet.pos.bi]; blk.rest = clamp(Math.round(v), 0, 600);
   if (blk.kind === 'ss') blk.parts.forEach(p => { p.rest = blk.rest; });
@@ -978,6 +975,9 @@ function commitField(el) {
   const v = parseField(el.dataset.k, el.value), act = el.dataset.sact, f = el.dataset.sf, i = el.dataset.i != null ? +el.dataset.i : null;
   if (v != null) { if (act === 'restAdj') setTrainRest(v); else if (act === 'item') setItemField(i, f, v); else setSlotField(f, v); }
   document.querySelectorAll('.stpv').forEach(x => { const txt = fieldText(x.dataset.sact, x.dataset.sf, x.dataset.i != null ? +x.dataset.i : null); x.value = txt; x.dataset.orig = txt; x.dataset.raw = txt; });
+  // a checklist item's chip shows its ticks or timer, so it follows a typed value too
+  const bl = act === 'item' && sheetBlock(), it = bl && bl.items[i], chip = it && document.querySelector('.ckchip[data-i="' + i + '"]');
+  if (chip) chip.textContent = it.timer ? it.timer + ' min' : '×' + (it.ticks || 1);
 }
 function removeRow(canRemove) { return canRemove ? '<div class="moverow"><button class="rm" data-a="remove">Remove</button></div>' : ''; }
 // A sheet slides up from the bottom. Pass `form` instead of a footer and it's a full-screen editor with Cancel/Done in a top bar,
@@ -1034,7 +1034,9 @@ function checkSheet() {
     const text = '<input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="text" value="' + esc(it.text) + '" placeholder="Item" aria-label="Item ' + (i + 1) + '" style="flex:1.4;min-width:0">';
     const detail = '<input class="sin" autocapitalize="sentences" enterkeyhint="next" data-ci="' + i + '" data-cf="detail" value="' + esc(it.detail) + '" placeholder="2 × 15" aria-label="Item ' + (i + 1) + ' detail" style="flex:1;min-width:0">';
     const chip = '<button class="ckchip' + (open ? ' on' : '') + '" data-a="ckSel" data-i="' + i + '" aria-expanded="' + open + '" aria-label="Item ' + (i + 1) + ': ' + (it.timer ? it.timer + ' minute timer' : (it.ticks || 1) + (it.ticks > 1 ? ' ticks' : ' tick')) + '. Tap to change">' + (it.timer ? it.timer + ' min' : '×' + (it.ticks || 1)) + '</button>';
-    const more = open ? '<div class="ckmore">' + stp('Ticks', 'ticks', it.ticks || 1, { act: 'item', i, name: 'Ticks for item ' + (i + 1) }) + stp('Timer', 'timer', it.timer ? it.timer + ' min' : 'Off', { act: 'item', i, kind: 'min', name: 'Timer for item ' + (i + 1) }) +
+    // An item is ticked off or timed, not both: pick which, then set just that one.
+    const kind = '<div class="seg2 ckkind" role="group" aria-label="Item ' + (i + 1) + ': ticks or a timer">' + [['ticks', 'Ticks', !it.timer], ['timer', 'Timer', !!it.timer]].map(([v, l, on]) => '<button class="' + (on ? 'on' : '') + '" data-a="itemKind" data-i="' + i + '" data-v="' + v + '" aria-pressed="' + on + '">' + l + '</button>').join('') + '</div>';
+    const more = open ? '<div class="ckmore">' + kind + (it.timer ? stp('Minutes', 'timer', it.timer + ' min', { act: 'item', i, kind: 'min', name: 'Timer for item ' + (i + 1) }) : stp('Ticks', 'ticks', it.ticks || 1, { act: 'item', i, name: 'Ticks for item ' + (i + 1) })) +
       '<button class="rmitem" data-a="delItem" data-i="' + i + '">Remove item</button></div>' : '';
     return '<div class="item' + (open ? ' open' : '') + '"><div class="two">' + text + detail + chip + '</div>' + more + '</div>';
   }).join('');
@@ -1059,17 +1061,19 @@ function padSheet() {
   return sheetBox(title,
     '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;gap:8px"><span class="dim" style="font-weight:500">' + esc(title) + '</span><span class="dim small">' + (lw ? 'Last time ' + (isKg ? kgVal(lw.kg) : lw.reps) : '') + '</span></div>',
     '<div class="padval"><span style="color:' + (sh.buf !== '' ? 'var(--cream)' : 'var(--half)') + '">' + esc(shown) + '</span><span class="caret" aria-hidden="true"></span></div>' +
-    (sh.work ? '<p class="dim small padnote" style="text-align:center">Warm-ups are worked out from this</p>' : '') + '<div class="chips">' + chips + '</div>' +
+    (sh.work ? '<p class="dim small padnote" style="text-align:center">Warm-ups are worked out from this</p>' : '') +
+    // ± chips need a number to start from; until there is one they keep their space but stay hidden, so the keys don't jump
+    '<div class="chips"' + (sh.buf === '' && cur == null ? ' style="visibility:hidden" aria-hidden="true"' : '') + '>' + chips + '</div>' +
     (rec.length ? '<div class="recent"><span class="dim small">' + recLabel + '</span>' + rec.map(k => '<button data-a="padSet" data-v="' + k + '">' + fmt(k) + '</button>').join('') + '</div>' : '') +
     '<div class="keys">' + ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del'].map(k => k === 'del' ? '<button data-a="key" data-k="del" aria-label="Delete">' + ICON.del + '</button>' : '<button data-a="key" data-k="' + k + '"' + (k === '.' && !isKg ? ' class="off" aria-disabled="true"' : '') + (k === '.' ? ' aria-label="Decimal point"' : '') + '>' + k + '</button>').join('') + '</div>',
     '<button class="primary" data-a="padDone">Done</button>');
 }
 function changeSheet() {
   const c = S.cur, t = target(c); if (!t || c.blocks[t.bi].kind === 'check') return '';
-  const b = liftAt(c, t), x = b.sets[t.i];
+  const b = liftAt(c, t), x = b.sets[t.i], last = lastLine(b, x, t.i);
   return sheetBox('Change the next set',
-    '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;gap:8px"><b style="font-size:17px">' + esc(b.name) + '</b><span class="dim small">' + esc(lastTxt(b, x, b.sets.slice(0, t.i).filter(y => y.kind === 'work').length)) + '</span></div>',
-    stepsHtml(b, x),
+    '<div class="chg-h"><b>' + esc(b.name) + '</b><span class="dim small">' + esc(setLabel(b, t.i) + (last ? ' · ' + last : '')) + '</span></div>',
+    bigSet(b, x),
     '<button class="primary" data-a="close">Done</button>');
 }
 function exSheet() {
@@ -1091,7 +1095,7 @@ function finishSheet() {
 }
 function sessionSheet() {
   const s = S.sessions.find(o => o.id === UI.sheet.id); if (!s) return '';
-  const lines = liftsOf(s).map(b => { const d = b.sets.filter(x => x.kind === 'work' && x.done); return '<div class="hrow">' + esc(b.name) + '<span>' + esc(d.length ? d.map(setTxt).join(', ') + unit(d[0].kg) : 'skipped') + '</span></div>'; }).join('');
+  const lines = liftsInOrderDone(s).map(b => { const d = b.sets.filter(x => x.kind === 'work' && x.done); return '<div class="hrow">' + esc(b.name) + '<span>' + esc(d.length ? setsLine(d) : 'Skipped') + '</span></div>'; }).join('');
   return sheetBox(s.name, '<h2>' + esc(s.name) + '</h2><p class="dim" style="margin-top:2px">' + esc(dateTxt(s.endedAt)) + ', ' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min</p>',
     '<div style="margin-top:8px">' + lines + '</div>',
     '<button class="primary" data-a="close">Done</button><button class="wide danger" data-a="delSession" data-id="' + esc(s.id) + '">' + (UI.confirm === 'del' ? 'Tap again to delete' : 'Delete workout') + '</button>');
@@ -1157,8 +1161,9 @@ function render() {
   else if (UI.screen === 'train' && c) {
     const t = nextOpen(c);
     if (!t) { finish(); return; }
-    if (c.rest) { html = '<div class="screen">' + restScreen(c) + '</div>'; cls = 'resting'; }
-    else { const b = c.blocks[t.bi]; html = '<div class="screen">' + (b.kind === 'check' ? checkScreen(c, t) : b.kind === 'ss' ? ssScreen(c, t) : liftScreen(c, t)) + '</div>'; }
+    // fixing a logged set (even mid-rest) shows that set's exercise
+    if (c.rest && !c.fix) { html = '<div class="screen">' + restScreen(c) + '</div>'; cls = 'resting'; }
+    else { const s = c.fix || t, b = c.blocks[s.bi]; html = '<div class="screen">' + (b.kind === 'check' ? checkScreen(c, s) : b.kind === 'ss' ? ssScreen(c, s) : liftScreen(c, s)) + '</div>'; }
   } else { UI.screen = 'today'; html = todayScreen(); cls = 'paper'; }
   const sh = sheetHtml();
   if (sh) html += '<div class="sheetwrap"><button class="scrim" data-a="' + (UI.sheet.type === 'pick' ? 'pickCancel' : UI.screen === 'edit' ? 'cancel' : 'close') + '" aria-label="Close"></button>' + sh.replace('class="sheet', 'class="sheet' + (UI.sheet !== render.sheetObj ? ' enter' : '')) + '</div>';
