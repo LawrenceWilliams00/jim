@@ -2,7 +2,7 @@
 // and refreshed from the network in the background, so a new deploy shows up on the next open.
 // Bump VERSION on every deploy: the app sees the new worker, fetches fresh files and reloads itself
 // (straight away on the Today screen, otherwise the next time it's put in the background).
-const VERSION = 'jim-8';
+const VERSION = 'jim-9';
 const FILES = [
   './',
   './index.html',

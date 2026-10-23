@@ -22,20 +22,23 @@ async function open(page, { seed } = {}) {
     await scope.getByRole('button', { name, exact }).first().click();
   };
   const times = async (name, n) => { for (let i = 0; i < n; i++) await tap(name); };
-  return { tap, times };
+  // The routine editor has one Add button that asks what to add.
+  const add = async kind => { await tap('Add'); await tap(kind); };
+  return { tap, times, add };
 }
 
 test('builds a routine from the shared exercise list', async ({ page }) => {
-  const { tap, times } = await open(page);
+  const { tap, times, add } = await open(page);
   await tap('New routine');
   await page.keyboard.type('Push day');
 
-  await tap('Checklist');
+  await add('Checklist');
   await page.keyboard.type('Band pull-aparts');
+  await page.locator('.ckchip').first().click(); // ticks and timer sit behind the chip
   await tap('Ticks for item 1, more');
   await tap('Done');
 
-  await tap('Exercise');
+  await add('Exercise');
   await page.keyboard.type('Bench press');
   await tap('New: Bench press');
   await expect(page.locator('.sheet .rm'), 'a new exercise has Cancel, not Remove').toHaveCount(0);
@@ -47,16 +50,16 @@ test('builds a routine from the shared exercise list', async ({ page }) => {
   await expect(page.locator('.blks')).toContainText('4 × 4–6');
 
   // Cancelling a new exercise leaves nothing behind in the list.
-  await tap('Exercise');
+  await add('Exercise');
   await page.keyboard.type('Bnech');
   await tap('New: Bnech');
   await tap('Cancel');
-  await tap('Exercise');
+  await add('Exercise');
   await expect(page.locator('.sheet .pickrow', { hasText: 'Bnech' })).toHaveCount(0);
   await tap('Cancel');
 
   // A superset starts empty.
-  await tap('Superset');
+  await add('Superset');
   await expect(page.locator('.sheet .partrow')).toHaveCount(0);
   await tap('Add an exercise');
   await page.keyboard.type('Leg curl');
@@ -80,12 +83,12 @@ test('builds a routine from the shared exercise list', async ({ page }) => {
 
   await tap('Done');
   await page.reload();
-  await expect(page.locator('.wcard')).toContainText('Leg curl');
-  await expect(page.locator('.rt')).toContainText('Push day');
+  await expect(page.locator('.hero4')).toContainText('Leg curl');
+  await expect(page.locator('.hero4')).toContainText('Push day');
 });
 
 test('trains a routine, and another routine sees the same history', async ({ page }) => {
-  const { tap } = await open(page, { seed: backup });
+  const { tap, add } = await open(page, { seed: backup });
   await tap('Start');
   // Last time was 4 × 6 at 60 kg, the top of 4–6, so it goes up by 2.5.
   await expect(page.locator('#card')).toContainText('62.5');
@@ -104,13 +107,13 @@ test('trains a routine, and another routine sees the same history', async ({ pag
 
   await tap('New routine');
   await page.keyboard.type('Pull day');
-  await tap('Exercise');
+  await add('Exercise');
   await page.keyboard.type('ben');
   await tap('Bench press');
   await expect(page.locator('.sheet')).toContainText('Also in Day A');
   await tap('Done');
   await tap('Done');
-  await page.getByRole('button', { name: /^Pull day/ }).click();
+  await expect(page.locator('.hero4'), 'the routine you just made is the one up').toContainText('Pull day');
   await tap('Start');
   await expect(page.locator('#card')).toContainText('last 4 × 62.5');
 });
@@ -120,7 +123,7 @@ test('backs up to a file and restores from one', async ({ page }) => {
   await tap('Backup');
   await page.locator('#restore-file').setInputFiles(backupFile);
   await expect(page.locator('.toast')).toContainText('Restored 1 routine and 1 workout');
-  await expect(page.locator('.rt')).toContainText('Day A');
+  await expect(page.locator('.hero4')).toContainText('Day A');
 
   await tap('Backup');
   const [download] = await Promise.all([page.waitForEvent('download'), tap('Download backup')]);
@@ -150,9 +153,9 @@ test('opens with no connection after the first visit', async ({ page, context })
 
 test.describe('with the on-screen keyboard open', () => {
   test('editors leave room for it when the page shrinks (Chrome on Android)', async ({ page }) => {
-    const { tap } = await open(page, { seed: backup });
+    const { tap, add } = await open(page, { seed: backup });
     await page.getByRole('button', { name: 'Edit' }).click();
-    await tap('Exercise');
+    await add('Exercise');
     const field = await page.evaluateHandle(() => document.getElementById('pick-q'));
     const { width } = page.viewportSize();
     await page.setViewportSize({ width, height: 420 }); // what's left above a typical keyboard
@@ -177,9 +180,9 @@ test.describe('with the on-screen keyboard open', () => {
       Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
       window.__keyboard = h => { kb = h; vv.dispatchEvent(new Event('resize')); };
     });
-    const { tap } = await open(page, { seed: backup });
+    const { tap, add } = await open(page, { seed: backup });
     await page.getByRole('button', { name: 'Edit' }).click();
-    await tap('Checklist');
+    await add('Checklist');
     // Enter walks through the list: item, its detail, then a fresh item.
     for (const [item, detail] of [['Bike', '5 min'], ['Band pull-aparts', '2 × 15'], ['Dislocates', '× 10']]) {
       await page.keyboard.type(item); await page.keyboard.press('Enter');
@@ -203,7 +206,7 @@ test.describe('with the on-screen keyboard open', () => {
 });
 
 test('the back gesture closes what you are in, not the app', async ({ page }) => {
-  const { tap } = await open(page, { seed: backup });
+  const { tap, add } = await open(page, { seed: backup });
   await page.getByRole('button', { name: 'Edit' }).click();
   await page.getByRole('button', { name: /^Bench press/ }).click();
   await expect(page.locator('.sheet.form')).toBeVisible();
@@ -213,7 +216,7 @@ test('the back gesture closes what you are in, not the app', async ({ page }) =>
   await expect(page.locator('.blks'), 'back keeps the change, like Done').toContainText('5 × 4–6');
 
   // Cancel closes it too, and the next back still lands one step up.
-  await tap('Exercise');
+  await add('Exercise');
   await tap('Cancel');
   await expect(page.locator('.sheet')).toHaveCount(0);
   await page.waitForTimeout(100);
@@ -248,6 +251,7 @@ test.describe('on a real phone', () => {
   test('typing is not disturbed by a toast or the rest timer', async ({ page }) => {
     const { tap } = await open(page, { seed: backup });
     await tap('Edit');
+    await tap('Routine options');
     await tap('Duplicate'); // shows a toast and puts you in the name field
     await page.keyboard.type(' x');
     await page.locator('#r-name').evaluate(el => el.setSelectionRange(3, 3));
@@ -289,9 +293,9 @@ test.describe('on a real phone', () => {
       Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
       window.__keyboard = h => { kb = h; vv.dispatchEvent(new Event('resize')); };
     });
-    const { tap } = await open(page, { seed: backup });
+    const { tap, add } = await open(page, { seed: backup });
     await tap('Edit');
-    await tap('Checklist');
+    await add('Checklist');
     for (const item of ['Bike', 'Rows', 'Dislocates', 'Push-ups']) { await page.keyboard.type(item); await page.keyboard.press('Enter'); await page.keyboard.press('Enter'); }
     await page.evaluate(() => window.__keyboard(340));
     await page.locator('[data-ci="3"][data-cf="detail"]').focus();
@@ -301,17 +305,18 @@ test.describe('on a real phone', () => {
 
   test('editor fields keep their size on a short screen', async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 560 });
-    const { tap } = await open(page, { seed: backup });
+    const { tap, add } = await open(page, { seed: backup });
     await tap('Edit');
-    for (let i = 0; i < 6; i++) { await tap('Checklist'); await tap('Done'); }
+    for (let i = 0; i < 6; i++) { await add('Checklist'); await tap('Done'); }
     expect((await page.locator('#r-name').boundingBox()).height).toBeGreaterThanOrEqual(48);
   });
 });
 
 test('numbers in the editors can be typed as well as stepped', async ({ page }) => {
-  const { tap } = await open(page, { seed: backup });
+  const { tap, add } = await open(page, { seed: backup });
   await tap('Edit');
   await page.getByRole('button', { name: /^Bench press/ }).click();
+  await page.getByRole('button', { name: /^More/ }).click(); // warm-ups and step size are folded away
   const type = async (id, text) => { await page.locator(id).click(); await page.keyboard.press('Control+A'); await page.keyboard.type(text); await page.keyboard.press('Enter'); };
 
   await type('#v-sets', '6');
@@ -350,8 +355,9 @@ test('numbers in the editors can be typed as well as stepped', async ({ page }) 
 
   await page.getByRole('button', { name: /^Back squat/ }).click();
   await tap('Cancel');
-  await tap('Checklist');
+  await add('Checklist');
   await page.keyboard.type('Bike');
+  await page.locator('.ckchip').first().click();
   await type('#v-timer-0', '5');
   await expect(page.locator('#v-timer-0')).toHaveValue('5 min');
   await type('#v-timer-0', '0');
@@ -378,5 +384,95 @@ test('the workout list does an exercise now, skips one, and brings it back', asy
   await tap('Done');
   for (let k = 1; k <= 3; k++) { await tap(`Log set ${k}`); if (k < 3) await tap('Skip rest'); }
   await expect(page.locator('.stats'), 'skipping the rest of the list finishes the workout').toBeVisible();
-  await expect(page.locator('.xr', { hasText: 'Bench press' })).toContainText('Skipped');
+  await expect(page.locator('.skipline')).toContainText('Bench press');
+});
+
+test.describe('editing a routine', () => {
+  const order = page => page.locator('.blk b').allTextContents();
+
+  test('items can be dragged into a new order with a mouse', async ({ page }) => {
+    const { tap } = await open(page, { seed: backup });
+    await tap('Edit');
+    expect(await order(page)).toEqual(['Bench press', 'Back squat']);
+    const squat = await page.locator('.blk').nth(1).boundingBox(), bench = await page.locator('.blk').nth(0).boundingBox();
+    await page.mouse.move(squat.x + 120, squat.y + squat.height / 2);
+    await page.mouse.down();
+    for (let k = 1; k <= 10; k++) await page.mouse.move(squat.x + 120, squat.y + squat.height / 2 - k * (squat.y - bench.y) / 10 - 4);
+    await page.mouse.up();
+    expect(await order(page)).toEqual(['Back squat', 'Bench press']);
+    await expect(page.locator('.sheet'), 'letting go is not a tap').toHaveCount(0);
+  });
+
+  test('on touch, hold then drag; a quick swipe does not move anything', async ({ page }) => {
+    const { tap } = await open(page, { seed: backup });
+    await tap('Edit');
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+    const squat = await page.locator('.blk').nth(1).boundingBox(), bench = await page.locator('.blk').nth(0).boundingBox();
+    const x = squat.x + 120, y0 = squat.y + squat.height / 2, y1 = bench.y + 6;
+
+    await touch('touchStart', x, y0);
+    for (let k = 1; k <= 6; k++) await touch('touchMove', x, y0 - k * (y0 - y1) / 6);
+    await touch('touchEnd');
+    expect(await order(page), 'a swipe is a scroll').toEqual(['Bench press', 'Back squat']);
+
+    await touch('touchStart', x, y0);
+    await page.waitForTimeout(450);
+    for (let k = 1; k <= 8; k++) await touch('touchMove', x, y0 - k * (y0 - y1) / 8);
+    await touch('touchEnd');
+    expect(await order(page)).toEqual(['Back squat', 'Bench press']);
+    await expect(page.locator('.sheet')).toHaveCount(0);
+  });
+
+  test('the ••• menu holds duplicate and delete, and Add asks what to add', async ({ page }) => {
+    const { tap } = await open(page, { seed: backup });
+    await tap('Edit');
+    await tap('Add');
+    await expect(page.locator('.sheet .menurow')).toHaveText(['Exercise', 'Superset', 'Checklist']);
+    await tap('Cancel');
+    await tap('Routine options');
+    await tap('Delete');
+    await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+    await tap('Undo');
+    await expect(page.locator('.hero4')).toContainText('Day A');
+  });
+});
+
+test('the set you just logged says Edit, and editing it keeps it logged', async ({ page }) => {
+  const { tap } = await open(page, { seed: backup });
+  await tap('Edit');
+  await page.getByRole('button', { name: /^Bench press/ }).click();
+  await page.locator('#v-rest').click(); await page.keyboard.press('Control+A'); await page.keyboard.type('0'); await page.keyboard.press('Enter');
+  await tap('Done'); await tap('Today');
+  await tap('Start');
+  await tap('Log set 1'); // no rest, so straight on to set 2
+  const logged = page.getByRole('button', { name: /^Set 1, .* Tap to edit/ });
+  await expect(logged).toContainText('Edit');
+  await expect(page.locator('.toast'), 'no pop-up').toHaveCount(0);
+  await logged.click();
+  await expect(page.locator('#card')).toContainText('Set 1, fixing');
+  await tap('One fewer rep');
+  await tap('Save');
+  await expect(page.getByRole('button', { name: /^Set 1, 3 × 62.5/ })).toBeVisible();
+  await tap('Log set 2');
+  await expect(page.getByRole('button', { name: /^Set 1, / })).not.toContainText('Edit');
+});
+
+test('Today shows the next routine big, the others small; the summary lists skips on one line', async ({ page }) => {
+  const second = JSON.parse(backup);
+  second.routines.push({ id: 'rB', name: 'Day B', order: 1, updatedAt: 1, blocks: [{ kind: 'lift', exId: 'x-back-squat', sets: 2, lo: 5, hi: 8, range: true, rest: 0, warm: 0 }] });
+  const { tap } = await open(page, { seed: JSON.stringify(second) });
+  await expect(page.locator('.hero4')).toContainText('Day B'); // Day A was last, so B is next
+  await page.locator('.orow', { hasText: 'Day A' }).click();
+  await expect(page.locator('.hero4')).toContainText('Day A');
+  await tap('Start');
+  await page.locator('button.pips').click();
+  await tap('Skip Back squat');
+  await tap('Done');
+  await tap('Log set 1');
+  await tap('Finish'); await tap('Finish workout');
+  await expect(page.locator('.skipline')).toContainText('Back squat');
+  await expect(page.locator('.xr')).toHaveCount(1);
+  await expect(page.locator('.paperscreen')).not.toContainText('first time');
+  await expect(page.locator('.paperscreen')).not.toContainText('−100%');
 });

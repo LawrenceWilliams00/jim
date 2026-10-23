@@ -28,7 +28,7 @@ h1, h2 { text-wrap: balance; }
 svg { flex: none; }
 .dim { color: var(--cream-2); }
 .small { font-size: 13px; }
-.app { position: relative; height: 100%; height: 100dvh; max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.app { position: relative; height: 100%; height: 100dvh; max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; overflow: clip; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .app input, .app textarea { -webkit-user-select: text; user-select: text; }
 /* Pressed feedback: without it a tap feels like it didn't land. */
 button:active:not(:disabled) { opacity: 0.7; }
@@ -48,8 +48,9 @@ button.pips { min-height: 44px; margin: -4px 0; }
 .resting .seg, .seg.sk { background: var(--line-rest); }
 .seg i { display: block; height: 100%; border-radius: 3px; background: var(--cream); }
 .seg.cur { height: 8px; border-radius: 4px; background: var(--half); }
-.over { flex: none; margin-top: 14px; height: 52px; border-radius: 14px; background: var(--gold); color: var(--on-gold); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-size: 17px; font-weight: 700; }
-.over span { display: flex; align-items: center; gap: 8px; }
+.over { flex: none; margin-top: 10px; height: 34px; border-radius: 10px; background: var(--gold); color: var(--on-gold); display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 15px; font-weight: 700; }
+.over span { display: flex; align-items: center; gap: 6px; }
+.over svg { width: 16px; height: 16px; }
 
 /* exercise header */
 .head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 14px; }
@@ -144,14 +145,7 @@ button.pips { min-height: 44px; margin: -4px 0; }
 .date { font-size: 15px; color: var(--ink-2); }
 .h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.1; }
 .h2 { font-size: 20px; font-weight: 700; margin-top: 24px; }
-.rts { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
-.rt { width: 100%; min-height: 60px; box-sizing: border-box; border-radius: 16px; box-shadow: inset 0 0 0 1px var(--paper-line); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; }
-.rt b { display: block; font-size: 17px; }
-.rt span.sub { display: block; font-size: 13px; color: var(--ink-2); }
-.rt.on { background: var(--ink); color: var(--paper); box-shadow: none; }
-.rt.on span.sub { color: var(--cream-2); }
 .tag { flex: none; height: 24px; padding: 0 9px; border-radius: 12px; background: var(--paper-2); color: var(--ink); font-size: 13px; font-weight: 600; display: flex; align-items: center; }
-.rt.on .tag { background: var(--gold); color: var(--on-gold); }
 .wcard { margin-top: 12px; padding: 16px 18px 18px; border-radius: 20px; background: var(--ink); color: var(--cream); }
 .wl { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 15px; }
 .wl:first-child { border-top: 0; padding-top: 0; }
@@ -188,11 +182,6 @@ button.pips { min-height: 44px; margin: -4px 0; }
 .blk .m { flex: 1; min-width: 0; }
 .blk b { display: block; font-size: 17px; }
 .blk span.sub { display: block; font-size: 13px; color: var(--ink-2); margin-top: 2px; }
-.adds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
-.adds button { height: 52px; border-radius: 14px; background: var(--ink); color: var(--paper); font-size: 15px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 4px; }
-.rowbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px; }
-.rowbtns button { height: 48px; border-radius: 14px; box-shadow: inset 0 0 0 1px var(--paper-line); font-size: 15px; font-weight: 600; color: var(--ink); text-align: center; }
-.rowbtns button.danger { color: var(--red-ink); }
 
 /* sheets */
 /* --kb is the part of the screen the on-screen keyboard covers, --vvh what is left; both set from app.js */
@@ -324,3 +313,56 @@ textarea { min-height: 96px; resize: vertical; }
 .plnow { flex: none; height: 32px; padding: 0 12px; border-radius: 16px; box-shadow: inset 0 0 0 1.5px var(--gold); display: flex; align-items: center; font-size: 13px; font-weight: 600; color: var(--gold); }
 .sq.ghosty { background: transparent; }
 .plx { flex: none; height: 44px; padding: 0 6px; font-size: 15px; font-weight: 600; color: var(--cream-2); }
+
+/* ---------- editors ---------- */
+/* Steppers are light rings; the number between them is the thing to look at. */
+.stp .sq { background: transparent; box-shadow: inset 0 0 0 1.5px var(--line); border-radius: 22px; }
+/* Exercise editor: warm-ups and step size fold under More */
+.morebtn { width: 100%; min-height: 60px; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); text-align: left; }
+.mb-t { flex: 1; min-width: 0; }
+.mb-t b { display: block; font-size: 15px; font-weight: 600; }
+.mb-t .sub { display: block; font-size: 13px; color: var(--cream-2); margin-top: 2px; }
+/* Checklist: one line per item; the chip opens its ticks and timer */
+.ckchip { flex: none; min-width: 56px; height: 44px; padding: 0 10px; border-radius: 22px; box-shadow: inset 0 0 0 1.5px var(--line); font-size: 15px; font-weight: 600; text-align: center; }
+.ckchip.on { background: var(--cream); color: var(--forest); box-shadow: none; }
+.item .ckmore { padding-bottom: 4px; }
+.item.open { padding-bottom: 6px; }
+.rmitem { height: 44px; font-size: 15px; font-weight: 600; color: var(--red); }
+/* Routine editor: one Add, the rest behind ••• */
+.etop-r { display: flex; align-items: center; }
+.dots3 { min-width: 44px; justify-content: center; letter-spacing: 1px; font-size: 15px !important; }
+.addone { width: 100%; height: 52px; margin-top: 14px; border-radius: 14px; background: var(--ink); color: var(--paper); font-size: 17px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.draghint { margin-top: 8px; font-size: 13px; color: var(--ink-2); text-align: center; }
+.menu { margin-top: 8px; }
+.menurow { width: 100%; min-height: 56px; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); font-size: 17px; font-weight: 600; text-align: left; }
+.menurow.danger { color: var(--red); }
+/* Drag to reorder */
+[data-drag] { touch-action: pan-y; }
+.drag-on > [data-drag] { transition: transform 0.15s ease; }
+.drag-on > [data-drag].dragging { transition: none; position: relative; z-index: 5; border-radius: 12px; box-shadow: 0 10px 28px rgba(14, 58, 36, 0.22); }
+.blks .dragging { background: var(--paper); }
+.sheet .dragging { background: var(--raised); }
+@media (hover: hover) { [data-drag] { cursor: grab; } .dragging { cursor: grabbing; } }
+
+/* ---------- Today ---------- */
+.eyebrow2 { margin-top: 18px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
+.hero4 { margin-top: 6px; }
+.hero4 .hn { display: block; font-size: 24px; letter-spacing: -0.3px; }
+.hero4 .hm { display: block; margin-top: 2px; font-size: 15px; color: var(--cream-2); }
+.hero4 .hx { margin-top: 12px; font-size: 15px; line-height: 1.45; color: var(--cream); }
+.h2.sm { font-size: 15px; margin-top: 22px; color: var(--ink-2); font-weight: 600; }
+.others { margin-top: 6px; }
+.orow { width: 100%; min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--paper-line); color: var(--ink); text-align: left; }
+.orow:last-child { border-bottom: 1px solid var(--paper-line); }
+.orow b { display: block; font-size: 17px; }
+.orow .sub { display: block; font-size: 13px; color: var(--ink-2); }
+.orow .tag { margin-left: auto; }
+
+/* ---------- workout ---------- */
+.panel.hero7 { padding: 10px 14px 14px; box-shadow: inset 0 0 0 1.5px var(--line); }
+.editlbl { justify-self: end; font-size: 15px; font-weight: 700; color: var(--gold); padding-left: 8px; }
+.collapsed .editlbl { flex: none; }
+
+/* ---------- summary ---------- */
+.skipline { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--paper-line); font-size: 15px; color: var(--ink-2); line-height: 1.4; }
+.skipline b { color: var(--ink); margin-right: 4px; }
