@@ -429,6 +429,15 @@ test.describe('editing a routine', () => {
     await touch('touchEnd');
     expect(await order(page)).toEqual(['Back squat', 'Bench press']);
     await expect(page.locator('.sheet')).toHaveCount(0);
+
+    // From the ⠿ grip there's no hold: it drags straight away.
+    const g = await page.locator('.blk .grip').nth(1).boundingBox(), top = await page.locator('.blk').nth(0).boundingBox();
+    const gx = g.x + g.width / 2, gy = g.y + g.height / 2;
+    await touch('touchStart', gx, gy);
+    for (let k = 1; k <= 8; k++) await touch('touchMove', gx, gy - k * (gy - top.y - 6) / 8);
+    await touch('touchEnd');
+    expect(await order(page)).toEqual(['Bench press', 'Back squat']);
+    await expect(page.locator('.sheet')).toHaveCount(0);
   });
 
   test('the ••• menu holds duplicate and delete, and Add asks what to add', async ({ page }) => {

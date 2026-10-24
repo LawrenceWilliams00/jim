@@ -27,6 +27,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const dateTxt = t => { const d = new Date(t); return d.toLocaleDateString('en-NZ', { weekday: 'short' }) + ' ' + d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'short' }); };
 const ICON = {
   back: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
+  grip: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg>',
   chev: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:.7"><path d="M9 6l6 6-6 6"/></svg>',
   down: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>',
   up: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>',
@@ -567,14 +568,16 @@ function paintRest(root, r) {
 setInterval(tick, 250);
 
 // ---------- drag to reorder (routine items, superset exercises) ----------
-// Mouse: press and drag. Touch: hold still for a moment, then drag; a quick swipe still scrolls.
+// The ⠿ grip: press and drag, straight away. Elsewhere on a row: drag with a mouse, or on touch hold still for a moment
+// first, so a quick swipe still scrolls and a tap still opens the item.
 const drag = { el: null };
 const dragItems = list => [...list.children].filter(x => x.hasAttribute('data-drag'));
 $app.addEventListener('pointerdown', e => {
   const el = e.target.closest('[data-drag]'); if (!el || e.button > 0 || drag.el) return;
-  Object.assign(drag, { el, list: el.parentElement, pid: e.pointerId, x0: e.clientX, y0: e.clientY, y: e.clientY, touch: e.pointerType !== 'mouse', active: false });
+  const grip = !!e.target.closest('[data-grip]');
+  Object.assign(drag, { el, list: el.parentElement, pid: e.pointerId, x0: e.clientX, y0: e.clientY, y: e.clientY, hold: e.pointerType !== 'mouse' && !grip, grip, active: false });
   clearTimeout(drag.timer);
-  if (drag.touch) drag.timer = setTimeout(startDrag, 350);
+  if (drag.hold) drag.timer = setTimeout(startDrag, 350);
 });
 function startDrag() {
   if (!drag.el) return;
@@ -605,8 +608,8 @@ document.addEventListener('pointermove', e => {
   drag.y = e.clientY;
   if (!drag.active) {
     const moved = Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0);
-    if (drag.touch) { if (moved > 8) { clearTimeout(drag.timer); drag.el = null; } return; } // moved before the hold: a scroll
-    if (Math.abs(e.clientY - drag.y0) < 6) return;
+    if (drag.hold) { if (moved > 8) { clearTimeout(drag.timer); drag.el = null; } return; } // moved before the hold: a scroll
+    if (Math.abs(e.clientY - drag.y0) < (drag.grip ? 3 : 6)) return;
     startDrag();
   }
   e.preventDefault(); dragMove();
@@ -865,12 +868,12 @@ function editScreen() {
     if (b.kind === 'check') { name = b.name || 'Checklist'; sub = (b.items || []).filter(it => it.text).map(it => it.text).join(', ') || 'Checklist'; }
     else if (b.kind === 'ss') { name = (b.parts || []).map(p => exName(p.exId)).join(' + ') || 'Empty superset'; sub = 'Superset, ' + ((b.parts || []).map(p => (p.sets || 3) + ' × ' + repsTxt(p)).join(', ') || 'no exercises') + ', rest ' + secTxt(b.rest || 0); }
     else { name = exName(b.exId); sub = (b.sets || 3) + ' × ' + repsTxt(b) + ', rest ' + secTxt(b.rest || 0) + (b.warm ? ', ' + plural(b.warm, 'warm-up') : ''); }
-    return '<button class="blk" data-a="openBlock" data-bi="' + bi + '" data-drag><span class="k" aria-hidden="true">' + (bi + 1) + '</span><span class="m"><b>' + esc(name) + '</b><span class="sub">' + esc(sub) + '</span></span>' + ICON.chev + '</button>';
+    return '<button class="blk" data-a="openBlock" data-bi="' + bi + '" data-drag>' + '<span class="grip" data-grip aria-hidden="true">' + ICON.grip + '</span>' + '<span class="m"><b>' + esc(name) + '</b><span class="sub">' + esc(sub) + '</span></span>' + ICON.chev + '</button>';
   }).join('');
   return '<div class="screen paperscreen">' +
     '<div class="etop"><button data-a="editDone">' + ICON.back + 'Today</button><span class="etop-r"><button class="dots3" data-a="rMenu" aria-label="Routine options">•••</button><button data-a="editDone">Done</button></span></div>' +
     '<input id="r-name" class="pin" autocapitalize="sentences" enterkeyhint="done" data-rf="name" value="' + esc(r.name) + '" placeholder="Routine name" aria-label="Routine name" autocomplete="off">' +
-    (rows ? '<div class="blks" data-drag-list="blocks">' + rows + '</div>' + (r.blocks.length > 1 ? '<p class="draghint">Hold and drag to reorder</p>' : '') : '') +
+    (rows ? '<div class="blks" data-drag-list="blocks">' + rows + '</div>' : '') +
     '<button class="addone" data-a="addMenu">' + ICON.plus + 'Add</button></div>';
 }
 // Exercises in the order they were done (Do now can change it), by each one's first logged set.
@@ -1021,7 +1024,7 @@ function slotSheet() {
 }
 function ssSheet() {
   const sh = UI.sheet, bl = sheetBlock(); if (!bl) return '';
-  const parts = bl.parts.map((p, i) => '<button class="partrow" data-a="openPart" data-p="' + i + '" data-drag><span class="badge o" aria-hidden="true">' + LETTERS[i] + '</span><span style="flex:1;min-width:0"><b style="display:block;font-size:17px">' + esc(exName(p.exId)) + '</b><span class="dim small">' + (p.sets || 3) + ' × ' + repsTxt(p) + '</span></span>' + ICON.chev + '</button>').join('');
+  const parts = bl.parts.map((p, i) => '<button class="partrow" data-a="openPart" data-p="' + i + '" data-drag>' + '<span class="grip" data-grip aria-hidden="true">' + ICON.grip + '</span>' + '<span style="flex:1;min-width:0"><b style="display:block;font-size:17px">' + esc(exName(p.exId)) + '</b><span class="dim small">' + (p.sets || 3) + ' × ' + repsTxt(p) + '</span></span>' + ICON.chev + '</button>').join('');
   return sheetBox('Superset', '',
     '<div style="margin-top:4px" data-drag-list="parts">' + parts + '</div><button class="ghost" style="width:100%;margin-top:8px;height:48px" data-a="addPart">' + ICON.plus + (bl.parts.length ? ' Add another' : ' Add an exercise') + '</button>' +
     '<div style="margin-top:12px">' + stp('Rest after round', 'ssrest', secTxt(bl.rest || 0), { kind: 'dur' }) + '</div>' + removeRow(!sh.isNew),

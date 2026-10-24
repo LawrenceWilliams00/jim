@@ -173,7 +173,6 @@ button.pips { min-height: 44px; margin: -4px 0; }
 .pin::placeholder { color: var(--ink-2); font-weight: 500; }
 .blks { margin-top: 16px; border-bottom: 1px solid var(--paper-line); }
 .blk { width: 100%; min-height: 60px; display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--paper-line); text-align: left; color: var(--ink); }
-.blk .k { flex: none; width: 32px; height: 32px; border-radius: 10px; background: var(--paper-2); color: var(--ink); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .blk .m { flex: 1; min-width: 0; }
 .blk b { display: block; font-size: 17px; }
 .blk span.sub { display: block; font-size: 13px; color: var(--ink-2); margin-top: 2px; }
@@ -329,12 +328,14 @@ textarea { min-height: 96px; resize: vertical; }
 .etop-r { display: flex; align-items: center; }
 .dots3 { min-width: 44px; justify-content: center; letter-spacing: 1px; font-size: 15px !important; }
 .addone { width: 100%; height: 52px; margin-top: 14px; border-radius: 14px; background: var(--ink); color: var(--paper); font-size: 17px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; }
-.draghint { margin-top: 8px; font-size: 13px; color: var(--ink-2); text-align: center; }
 .menu { margin-top: 8px; }
 .menurow { width: 100%; min-height: 56px; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); font-size: 17px; font-weight: 600; text-align: left; }
 .menurow.danger { color: var(--red); }
 /* Drag to reorder */
 [data-drag] { touch-action: pan-y; }
+/* ⠿ grip: the whole height of the row, and the page doesn't scroll from it, so a drag starts at once */
+.grip { flex: none; align-self: stretch; width: 40px; margin: -10px -4px -10px -8px; display: flex; align-items: center; justify-content: center; color: var(--ink-2); touch-action: none; }
+.sheet .grip { color: var(--cream-2); margin: 0 -2px 0 -8px; }
 .drag-on > [data-drag] { transition: transform 0.15s ease; }
 .drag-on > [data-drag].dragging { transition: none; position: relative; z-index: 5; border-radius: 12px; box-shadow: 0 10px 28px rgba(14, 58, 36, 0.22); }
 .blks .dragging { background: var(--paper); }
