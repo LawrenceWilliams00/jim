@@ -607,3 +607,27 @@ test.describe('a routine from pasted JSON', () => {
     await expect(page.locator('.blk')).toHaveCount(4);
   });
 });
+
+test('leaving a new routine without adding anything keeps nothing', async ({ page }) => {
+  const junk = JSON.parse(backup);
+  junk.routines.push({ id: 'rJunk', name: 'Untitled routine', order: 5, updatedAt: 1, blocks: [] }); // left by older versions
+  const { tap } = await open(page, { seed: JSON.stringify(junk) });
+  await expect(page.locator('.paperscreen')).not.toContainText('Untitled routine');
+  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('jim.v3')).routines.map(r => r.name));
+
+  await tap('New routine');
+  await tap('Today');
+  await expect(page.locator('.hero4')).toContainText('Day A');
+  await expect(page.locator('.orow')).toHaveCount(0);
+  await tap('New routine');
+  await page.goBack(); // Android back
+  await expect(page.locator('.orow')).toHaveCount(0);
+  expect(await stored()).toEqual(['Day A']);
+
+  // A name is enough to keep it.
+  await tap('New routine');
+  await page.keyboard.type('Legs');
+  await tap('Done');
+  await expect(page.locator('.hero4')).toContainText('Legs');
+  expect(await stored()).toEqual(['Day A', 'Legs']);
+});

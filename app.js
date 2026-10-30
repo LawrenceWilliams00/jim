@@ -71,6 +71,8 @@ function ensureEx(name, step) {
   const ex = { id, name: nm, step: step || 2.5, notes: '', updatedAt: 0 };
   S.exercises[id] = ex; return ex;
 }
+// A routine with nothing in it and no name of its own was never really made (New routine, then straight back out).
+function blankRoutine(r) { return !!r && !(r.blocks || []).length && (!String(r.name || '').trim() || r.name === 'Untitled routine'); }
 function migrate() {
   const dirtyR = new Set(), dirtyX = new Set(), dirtyS = new Set();
   const before = new Set(Object.keys(S.exercises));
@@ -81,6 +83,7 @@ function migrate() {
   if (S.notes) { Object.entries(S.notes).forEach(([k, v]) => { const ex = findByName(k); if (ex && v && !ex.notes) { ex.notes = v; dirtyX.add(ex.id); } }); delete S.notes; }
   let settings = false; if (S.settings.rest) { delete S.settings.rest; settings = true; }
   ['ui', 'look', 'opt'].forEach(k => { if (S.settings[k]) { delete S.settings[k]; settings = true; } }); // left over from trying layouts
+  if (S.routines.some(blankRoutine)) { S.routines = S.routines.filter(r => !blankRoutine(r)); settings = true; } // older versions kept these
   Object.keys(S.exercises).forEach(id => { if (!before.has(id)) dirtyX.add(id); });
   return { routines: [...dirtyR], exercises: [...dirtyX], sessions: [...dirtyS], settings };
 }
@@ -468,7 +471,12 @@ const A = {
   // routines
   newRoutine: () => { const r = { id: uid('r'), name: '', order: Math.max(0, ...S.routines.map(x => x.order || 0)) + 1, blocks: [], updatedAt: now() }; S.routines.push(r); saveRoutine(r); UI.editId = r.id; UI.sel = r.id; UI.screen = 'edit'; UI.focus = '#r-name'; render(); },
   editRoutine: d => { UI.editId = d.id; UI.screen = 'edit'; UI.sheet = null; render(); },
-  editDone: () => { const r = curRoutine(); if (r && !String(r.name).trim()) { r.name = 'Untitled routine'; saveRoutine(r); } UI.screen = 'today'; UI.sheet = null; render(); },
+  editDone: () => {
+    const r = curRoutine();
+    if (blankRoutine(r)) { S.routines = S.routines.filter(x => x !== r); if (UI.sel === r.id) UI.sel = null; UI.editId = null; removeRoutineStore(r.id); }
+    else if (r && !String(r.name).trim()) { r.name = 'Untitled routine'; saveRoutine(r); }
+    UI.screen = 'today'; UI.sheet = null; render();
+  },
   dupRoutine: () => { const r = curRoutine(); if (!r) return; UI.sheet = null; const c = clone(r); c.id = uid('r'); c.name = (r.name || 'Routine') + ' copy'; c.order = (r.order || 0) + 0.5; S.routines.push(c); routinesSorted().forEach((x, i) => { x.order = i; saveRoutine(x); }); UI.editId = c.id; UI.sel = c.id; UI.focus = '#r-name'; toast('Copied. You’re editing the copy.'); },
   delRoutine: () => { const r = curRoutine(); if (!r) return; UI.sheet = null; S.routines = S.routines.filter(x => x.id !== r.id); removeRoutineStore(r.id); UI.undoRoutine = r; UI.undoEx = pruneEx(slotsOf(r).map(s => s.exId)); UI.editId = null; UI.sel = null; UI.screen = 'today'; toast('Deleted ' + (r.name || 'routine') + '.', 'undoDelRoutine'); },
   undoDelRoutine: () => { const r = UI.undoRoutine; if (!r) return; (UI.undoEx || []).forEach(x => { S.exercises[x.id] = x; saveEx(x); }); S.routines.push(r); saveRoutine(r); UI.undoRoutine = null; UI.toast = null; UI.sel = r.id; render(); },
