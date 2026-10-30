@@ -631,3 +631,32 @@ test('leaving a new routine without adding anything keeps nothing', async ({ pag
   await expect(page.locator('.hero4')).toContainText('Legs');
   expect(await stored()).toEqual(['Day A', 'Legs']);
 });
+
+test('a long name on a small phone still leaves Skip rest on screen; a 3-part superset says what is left', async ({ page }) => {
+  const seed = JSON.parse(backup);
+  Object.assign(seed.exercises, {
+    'x-rdl': { id: 'x-rdl', name: 'Romanian deadlift with a 2 second pause', step: 2.5, notes: '', updatedAt: 1 },
+    'x-a': { id: 'x-a', name: 'Leg curl', step: 2.5, notes: '', updatedAt: 1 },
+    'x-b': { id: 'x-b', name: 'Lateral raise', step: 1, notes: '', updatedAt: 1 },
+    'x-c': { id: 'x-c', name: 'Curls', step: 1, notes: '', updatedAt: 1 },
+  });
+  seed.routines = [{ id: 'rL', name: 'Long', order: 0, updatedAt: 1, blocks: [
+    { kind: 'lift', exId: 'x-rdl', sets: 2, lo: 6, hi: 8, range: true, rest: 120, warm: 0 },
+    { kind: 'ss', rest: 60, parts: ['x-a', 'x-b', 'x-c'].map(exId => ({ exId, sets: 2, lo: 10, hi: 12, range: true, warm: 0 })) },
+  ] }];
+  const { tap } = await open(page, { seed: JSON.stringify(seed) });
+  await tap('Start');
+  await tap('Set a weight'); await tap('6'); await tap('0'); await tap('Done');
+  await tap('Log set 1');
+  const skip = await page.getByRole('button', { name: 'Skip rest' }).boundingBox();
+  expect(skip.y + skip.height).toBeLessThanOrEqual(page.viewportSize().height);
+  await tap('Skip rest');
+
+  // Change the weight for set 2, so the summary writes the sets in runs.
+  await tap('Less weight'); await tap('Less weight');
+  await tap('Log set 2');
+  await tap('Skip rest');
+  await expect(page.locator('#scroll')).toContainText('Then Lateral raise and Curls, then 1:00 rest');
+  await tap('Finish'); await tap('Finish workout');
+  await expect(page.locator('.xr').first()).toContainText('6 @ 60 · 6 @ 55 kg');
+});

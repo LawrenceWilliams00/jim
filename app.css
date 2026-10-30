@@ -117,7 +117,8 @@ button.pips { min-height: 44px; margin: -4px 0; }
 
 /* rest */
 /* The ring gives way on short screens so Skip rest never drops off the bottom; the digits scale with it. */
-.ringwrap { flex: none; position: relative; width: clamp(140px, calc(var(--vvh, 100dvh) - 400px), min(300px, 76vw)); aspect-ratio: 1; margin: 0 auto; container-type: inline-size; }
+/* The ring takes whatever height is left (a two-line name, a wrapped line below), up to its full size, so Skip rest always fits. */
+.ringwrap { flex: 20 1 0; min-height: 120px; max-height: min(300px, 76vw); width: auto; aspect-ratio: 1; position: relative; margin: 0 auto; container-type: inline-size; }
 .ringwrap svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .ringtxt { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .big { font-size: 34cqw; font-weight: 700; line-height: 1; letter-spacing: -0.04em; }
@@ -130,7 +131,7 @@ button.pips { min-height: 44px; margin: -4px 0; }
 .line .t { flex: 1; min-width: 0; font-size: 15px; }
 .okdot { flex: none; width: 24px; height: 24px; border-radius: 12px; background: var(--gold); color: var(--on-gold); display: flex; align-items: center; justify-content: center; }
 .prtag { flex: none; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--gold); color: var(--on-gold); font-size: 13px; font-weight: 700; display: flex; align-items: center; }
-.ltxt { flex: none; height: 44px; padding: 0 4px 0 10px; display: flex; align-items: center; gap: 2px; font-size: 15px; font-weight: 500; color: var(--cream-2); }
+.ltxt { flex: none; min-width: 44px; justify-content: flex-end; height: 44px; padding: 0 4px 0 10px; display: flex; align-items: center; gap: 2px; font-size: 15px; font-weight: 500; color: var(--cream-2); }
 
 /* paper screens */
 .paperscreen { color: var(--ink); overflow-y: auto; padding-block: 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
@@ -255,7 +256,7 @@ textarea { min-height: 96px; resize: vertical; }
 .wide { width: 100%; height: 48px; margin-top: 8px; font-size: 17px; font-weight: 500; color: var(--cream-2); text-align: center; }
 .danger { color: var(--red); }
 
-.toast { position: absolute; left: max(var(--gut), env(safe-area-inset-left, 0px)); right: max(var(--gut), env(safe-area-inset-right, 0px)); bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 16px; min-height: 44px; border-radius: 14px; background: var(--cream); color: var(--forest); font-size: 15px; font-weight: 500; line-height: 1.35; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.toast { position: absolute; left: max(var(--gut), env(safe-area-inset-left, 0px)); right: max(var(--gut), env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 16px; min-height: 44px; border-radius: 14px; background: var(--cream); color: var(--forest); font-size: 15px; font-weight: 500; line-height: 1.35; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
 /* During a workout the bottom of the screen is all controls, so toasts sit under the progress bar instead. */
 .toast.top { top: calc(70px + env(safe-area-inset-top, 0px)); bottom: auto; }
 .toast span { flex: 1; padding: 6px 0; }
@@ -306,7 +307,7 @@ textarea { min-height: 96px; resize: vertical; }
 .plr.done .plm-t b, .plr.skipped .plm-t b { color: var(--cream-2); font-weight: 500; }
 .plnow { flex: none; height: 32px; padding: 0 12px; border-radius: 16px; box-shadow: inset 0 0 0 1.5px var(--gold); display: flex; align-items: center; font-size: 13px; font-weight: 600; color: var(--gold); }
 .sq.ghosty { background: transparent; }
-.plx { flex: none; height: 44px; padding: 0 6px; font-size: 15px; font-weight: 600; color: var(--cream-2); }
+.plx { flex: none; min-width: 48px; height: 44px; padding: 0 6px; font-size: 15px; font-weight: 600; color: var(--cream-2); }
 
 /* ---------- editors ---------- */
 /* Steppers are light rings; the number between them is the thing to look at. */

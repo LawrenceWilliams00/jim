@@ -576,7 +576,7 @@ const A = {
     let plan; try { plan = readRoutineJson(sh.text); } catch (e) { sh.tried = true; render(); return; }
     r.blocks.push(...blocksFromPlan(plan));
     if (plan.name && !String(r.name || '').trim()) r.name = plan.name;
-    UI.sheet = null; UI.focus = null; saveRoutine(r); render(); toast('Added ' + plural(plan.blocks.length, 'item') + '.');
+    UI.sheet = null; UI.focus = null; saveRoutine(r); render();
   },
   rMenu: () => openSheet({ type: 'rmenu' }),
   planNow: d => { const c = S.cur, t = nextOpen(c), bi = +d.bi; if (!t || bi === t.bi) { UI.sheet = null; render(); return; } const [b] = c.blocks.splice(bi, 1); c.blocks.splice(t.bi > bi ? t.bi - 1 : t.bi, 0, b); c.pick = null; c.fix = null; c.over = null; UI.sheet = null; UI.showWarm = false; UI.scrollToCard = true; touchCur(); render(); },
@@ -584,7 +584,7 @@ const A = {
   planSkip: d => { const c = S.cur, b = c.blocks[+d.bi]; if (b.kind === 'check') b.skipped = true; else blockSets(b).forEach(x => { if (isOpen(x)) x.skipped = true; }); c.pick = null; c.fix = null; if (c.cardio && c.cardio.bi === +d.bi) c.cardio = null; touchCur(); if (!nextOpen(c)) { UI.sheet = null; finish(); return; } render(); },
   planBack: d => { const b = S.cur.blocks[+d.bi]; if (b.kind === 'check') b.skipped = false; else blockSets(b).forEach(x => { if (x.skipped) x.skipped = false; }); touchCur(); render(); },
   showWarm: () => { UI.showWarm = true; render(); },
-  later: () => { const c = S.cur, t = nextOpen(c); if (!t || t.bi === c.blocks.length - 1) { UI.sheet = null; toast('This is already the last one.'); return; } const [b] = c.blocks.splice(t.bi, 1); c.blocks.push(b); c.pick = null; c.fix = null; UI.sheet = null; touchCur(); toast(blockTitle(b) + ' moved to the end.'); },
+  later: () => { const c = S.cur, t = nextOpen(c); if (!t || t.bi === c.blocks.length - 1) { UI.sheet = null; toast('This is already the last one.'); return; } const [b] = c.blocks.splice(t.bi, 1); c.blocks.push(b); c.pick = null; c.fix = null; UI.sheet = null; touchCur(); toast('Moved to the end of the workout.'); },
   pick: d => { S.cur.pick = { bi: +d.bi, p: +d.p }; touchCur(); render(); },
   // rest
   restLess: () => { const r = S.cur.rest; if (!r) return; r.endsAt = Math.max(now() + 1000, r.endsAt - 15000); touchCur(); tick(); },
@@ -921,7 +921,8 @@ function ssScreen(c, t) {
   });
   const others = blk.parts.filter((p, pi) => pi !== cp && isOpen(p.sets[r]));
   const lastRound = !blk.parts.some(p => p.sets.some((y, k) => k > r && isOpen(y)));
-  const note = fx ? 'Editing round ' + (r + 1) : others.length ? 'Then ' + others[0].name + ', then ' + secTxt(blk.rest) + ' rest' : lastRound ? 'Last round' : 'Then ' + secTxt(blk.rest) + ' rest';
+  const names = others.map(p => p.name), list = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0];
+  const note = fx ? 'Editing round ' + (r + 1) : others.length ? 'Then ' + list + ', then ' + secTxt(blk.rest) + ' rest' : lastRound ? 'Last round' : 'Then ' + secTxt(blk.rest) + ' rest';
   const tx = blk.parts[cp].sets[r];
   return topHtml(c) + overHtml(c) +
     '<div class="sshead"><div><div class="eyebrow">' + ICON.link + 'Superset</div><h1 class="h1" style="margin-top:4px">Round ' + (r + 1) + ' of ' + R + '</h1></div></div>' +
@@ -1014,10 +1015,11 @@ function liftsInOrderDone(s) {
   const first = b => Math.min(Infinity, ...b.sets.filter(x => x.done && x.at).map(x => x.at));
   return liftsOf(s).map((b, k) => [b, first(b), k]).sort((p, q) => (p[1] - q[1]) || (p[2] - q[2])).map(p => p[0]);
 }
-// "6, 6, 5 @ 110 kg" when the weight held; each set written out when it didn't.
+// "6, 6, 5 @ 110 kg", and when the weight changed, "6, 6 @ 110 · 5, 5 @ 107.5 kg".
 function setsLine(dn) {
-  const kgs = [...new Set(dn.map(x => x.kg))];
-  return kgs.length === 1 ? dn.map(x => x.reps).join(', ') + ' @ ' + kgVal(kgs[0]) + unit(kgs[0]) : dn.map(setTxt).join(', ') + (dn.some(x => x.kg) ? ' kg' : '');
+  const runs = [];
+  dn.forEach(x => { const last = runs[runs.length - 1]; if (last && last.kg === x.kg) last.reps.push(x.reps); else runs.push({ kg: x.kg, reps: [x.reps] }); });
+  return runs.map(g => g.reps.join(', ') + ' @ ' + kgVal(g.kg)).join(' · ') + (dn.some(x => x.kg) ? ' kg' : '');
 }
 function summaryScreen() {
   const s = UI.summary; if (!s) return todayScreen();
@@ -1191,7 +1193,7 @@ function padSheet() {
   const st = isKg ? b.step : 1, base = val == null ? 0 : val;
   const chips = [-2 * st, -st, st, 2 * st].map(dl => '<button data-a="padSet" data-v="' + Math.max(0, r2(base + dl)) + '" aria-label="' + (dl > 0 ? 'Add ' : 'Take off ') + fmt(Math.abs(dl)) + '">' + (dl > 0 ? '+' : '−') + fmt(Math.abs(dl)) + '</button>').join('');
   let rec = [], recLabel = '';
-  if (isKg) { const seen = []; [x.kg, ...b.sets.filter(y => y.done).map(y => y.kg), ...historyFor(b.exId, 4).flatMap(h => h.sets.map(y => y.kg))].forEach(k => { if (k != null && !seen.includes(k) && k !== val) seen.push(k); }); rec = seen.slice(0, 3); recLabel = 'Recent'; }
+  if (isKg) { const seen = []; [x.kg, ...b.sets.filter(y => y.done && y.kind === x.kind).map(y => y.kg), ...historyFor(b.exId, 4).flatMap(h => h.sets.map(y => y.kg))].forEach(k => { if (k != null && !seen.includes(k) && k !== val) seen.push(k); }); rec = seen.slice(0, 3); recLabel = 'Recent'; }
   else { rec = [b.lo, Math.round((b.lo + b.hi) / 2), b.hi].filter((v, i, a) => a.indexOf(v) === i); recLabel = 'Aim'; }
   const shown = sh.buf !== '' ? sh.buf : cur == null ? '—' : String(isKg ? fmt(cur) : cur);
   return sheetBox(title,
