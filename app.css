@@ -370,3 +370,13 @@ textarea { min-height: 96px; resize: vertical; }
 /* ---------- summary ---------- */
 .skipline { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--paper-line); font-size: 15px; color: var(--ink-2); line-height: 1.4; }
 .skipline b { color: var(--ink); margin-right: 4px; }
+
+/* ---------- paste a routine as JSON ---------- */
+.pasterow { display: flex; gap: 8px; margin-top: 4px; }
+.pasterow .ghost { flex: 1; min-width: 0; height: 48px; padding: 0 10px; font-size: 15px; text-align: center; }
+.pastebox { min-height: 240px; margin-top: 10px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-height: 560px) { .pastebox { min-height: 130px; } }
+.pastest { min-height: 20px; margin-top: 8px; font-size: 15px; line-height: 1.4; color: var(--cream-2); }
+.pastest .ok { color: var(--cream); }
+.pastest .ok svg { width: 16px; height: 16px; vertical-align: -3px; margin-right: 6px; color: var(--gold); }
+.pastest .bad { color: var(--red); }

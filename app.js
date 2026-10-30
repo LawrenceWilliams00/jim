@@ -349,6 +349,112 @@ function restoreExercises(snapEx) {
 }
 function restoreSnap(sh) { const r = curRoutine(); if (!r || !sh.snap) return; const was = blockExIds(r.blocks[sh.bi]); r.blocks[sh.bi] = sh.snap.block; pruneEx(restoreExercises(sh.snap.exercises).concat(was)); }
 
+// ---------- a routine from pasted JSON ----------
+// Forgiving on purpose: it'll usually come from an AI chat or a notes app, so code fences, chatter around the JSON,
+// curly quotes and trailing commas are all fine, and the field names can vary ("reps": "6-8", "rest": "2 min", …).
+const PASTE_EXAMPLE = JSON.stringify({
+  name: 'Push day',
+  items: [
+    { checklist: 'Warm-up', items: [{ text: 'Easy bike', timer: 5 }, 'Band pull-aparts | 2 × 15'] },
+    { exercise: 'Bench press', sets: 4, reps: '4-6', rest: '3:00', warmups: 3, notes: 'Pause the first rep' },
+    { exercise: 'Incline dumbbell press', sets: 3, reps: '8-12', rest: 120 },
+    { superset: [{ exercise: 'Lateral raise', sets: 3, reps: '12-15' }, { exercise: 'Triceps pushdown', sets: 3, reps: '10-12' }], rest: 90 },
+  ],
+}, null, 2);
+const firstOf = (x, keys) => { for (const k of keys) if (x[k] != null && x[k] !== '') return x[k]; return null; };
+const numOf = v => { if (typeof v === 'number') return isFinite(v) ? v : null; const m = String(v == null ? '' : v).match(/\d+(?:[.,]\d+)?/); return m ? parseFloat(m[0].replace(',', '.')) : null; };
+// Rest in seconds. Plain numbers follow the editor's rule: 9 or less is minutes, more is seconds.
+function restFrom(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return clamp(Math.round(v <= 9 ? v * 60 : v), 0, 600);
+  const s = String(v).toLowerCase(), mm = s.match(/(\d+):(\d{2})/);
+  if (mm) return clamp(+mm[1] * 60 + +mm[2], 0, 600);
+  const ns = (s.match(/\d+(?:\.\d+)?/g) || []).map(Number); if (!ns.length) return null;
+  const n = ns[ns.length - 1]; // "2-3 min": the top of the range
+  return clamp(Math.round(/\d\s*m(?:in|ins|inute|inutes)?\b/.test(s) ? n * 60 : /\d\s*s(?:ec|ecs|econd|econds)?\b/.test(s) ? n : n <= 9 ? n * 60 : n), 0, 600);
+}
+function liftFrom(x, label) {
+  if (typeof x === 'string') x = { exercise: x };
+  const nm = String(firstOf(x, ['exercise', 'name', 'title', 'exercise_name', 'exerciseName', 'movement']) || (x.exId && S.exercises[x.exId] && S.exercises[x.exId].name) || '').trim();
+  if (!nm) throw new Error(label + ' has no exercise name.');
+  const p = { name: nm }, sets = numOf(firstOf(x, ['sets', 'set_count', 'setCount', 'rounds']));
+  if (sets != null) p.sets = clamp(Math.round(sets), 1, 12);
+  const reps = firstOf(x, ['reps', 'rep', 'rep_range', 'repRange', 'repetitions']);
+  const lo = numOf(firstOf(x, ['lo', 'min', 'reps_min', 'repsMin', 'min_reps', 'minReps'])), hi = numOf(firstOf(x, ['hi', 'max', 'reps_max', 'repsMax', 'max_reps', 'maxReps']));
+  const rm = reps == null ? null : String(reps).match(/(\d+)\s*(?:-|–|—|to)\s*(\d+)/i);
+  if (rm) Object.assign(p, { lo: +rm[1], hi: Math.max(+rm[1], +rm[2]), range: +rm[2] > +rm[1] });
+  else if (numOf(reps) != null) Object.assign(p, { lo: Math.round(numOf(reps)), hi: Math.round(numOf(reps)), range: false });
+  else if (lo != null) Object.assign(p, { lo: Math.round(lo), hi: Math.round(Math.max(lo, hi == null ? lo : hi)), range: hi != null && hi > lo });
+  if (p.lo != null) { p.lo = clamp(p.lo, 1, 100); p.hi = clamp(p.hi, p.lo, 100); }
+  if (typeof x.range === 'boolean' && p.lo != null) p.range = x.range && p.hi > p.lo;
+  const rest = restFrom(firstOf(x, ['rest', 'rest_seconds', 'restSeconds', 'rest_sec', 'restSec', 'rest_time', 'restTime']));
+  if (rest != null) p.rest = rest;
+  const warm = numOf(firstOf(x, ['warmups', 'warm_ups', 'warmUps', 'warmup_sets', 'warmupSets', 'warm', 'warmup']));
+  if (warm != null) p.warm = clamp(Math.round(warm), 0, 4);
+  const notes = firstOf(x, ['notes', 'note', 'cues', 'cue']); if (notes != null) p.notes = String(notes);
+  const step = numOf(firstOf(x, ['step', 'increment', 'kg_step'])); if (step) p.step = clamp(step, 0.25, 50);
+  return p;
+}
+function checkItemFrom(x) {
+  if (typeof x === 'string') { const m = x.split(/\s+[—–-]\s+|\s*\|\s*|:\s+/); return { text: m[0].trim(), detail: m.slice(1).join(' ').trim(), ticks: 1, timer: 0 }; }
+  const text = String(firstOf(x, ['text', 'name', 'item', 'exercise', 'title']) || '').trim();
+  let timer = firstOf(x, ['timer', 'minutes', 'duration', 'time']);
+  if (timer != null) { const sec = typeof timer === 'number' ? (timer > 60 ? timer : timer * 60) : restFrom(String(timer).replace(/^(\d+(?:\.\d+)?)$/, '$1 min')); timer = sec ? clamp(Math.round(sec / 60) || 1, 1, 60) : 0; }
+  const detail = firstOf(x, ['detail', 'details', 'note', 'notes', 'reps']);
+  return { text, detail: detail == null ? '' : String(detail), ticks: timer ? 1 : clamp(Math.round(numOf(firstOf(x, ['ticks', 'rounds', 'sets'])) || 1), 1, 6), timer: timer || 0 };
+}
+// Text → { name, blocks } with exercises still as names. Throws an Error with a message fit to show.
+function readRoutineJson(text) {
+  let s = String(text || '').trim();
+  if (!s) throw new Error('Paste a routine first.');
+  const a = s.search(/[[{]/), z = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
+  if (a < 0 || z < a) throw new Error('That isn’t JSON. It should start with { or [.');
+  s = s.slice(a, z + 1).replace(/[“”]/g, '"').replace(/[‘’]/g, '\'').replace(/,(\s*[}\]])/g, '$1');
+  let o; try { o = JSON.parse(s); } catch (e) { throw new Error('That isn’t valid JSON: ' + e.message.replace(/^JSON\.parse: /, '')); }
+  if (o && !Array.isArray(o) && Array.isArray(o.routines)) { if (o.routines.length !== 1) throw new Error('That has ' + o.routines.length + ' routines. Paste one at a time.'); o = o.routines[0]; }
+  if (o && o.routine && typeof o.routine === 'object') o = o.routine;
+  const list = Array.isArray(o) ? o : o && (o.items || o.blocks || o.exercises || o.workout);
+  if (!Array.isArray(list) || !list.length) throw new Error('Couldn’t find the exercises. Put them in a list called "items".');
+  const blocks = list.map((x, k) => {
+    const label = 'Item ' + (k + 1), kind = x && typeof x === 'object' ? String(x.kind || x.type || '').toLowerCase() : '';
+    if (x && typeof x === 'object' && (Array.isArray(x.superset) || kind === 'ss' || kind === 'superset')) {
+      const parts = (Array.isArray(x.superset) ? x.superset : x.parts || x.exercises || x.items || []).map((p, j) => liftFrom(p, label + ', exercise ' + (j + 1)));
+      if (!parts.length) throw new Error(label + ' is a superset with no exercises.');
+      const given = restFrom(firstOf(x, ['rest', 'rest_seconds', 'restSeconds', 'rest_after_round'])), rest = given != null ? given : parts.reduce((m, p) => Math.max(m, p.rest || 0), 0) || null;
+      if (parts.length === 1) return Object.assign({ kind: 'lift' }, parts[0], rest != null ? { rest } : {});
+      parts.forEach(p => { delete p.rest; });
+      return { kind: 'ss', rest: rest ?? 90, parts };
+    }
+    if (x && typeof x === 'object' && (x.checklist != null || kind === 'check' || kind === 'checklist')) {
+      const raw = Array.isArray(x.checklist) ? x.checklist : x.items || [];
+      const items = raw.map(checkItemFrom).filter(it => it.text);
+      if (!items.length) throw new Error(label + ' is a checklist with nothing in it.');
+      return { kind: 'check', name: String((typeof x.checklist === 'string' && x.checklist) || x.name || x.title || 'Warm-up').trim(), items };
+    }
+    return Object.assign({ kind: 'lift' }, liftFrom(x, label));
+  });
+  const name = Array.isArray(o) ? '' : String(firstOf(o, ['name', 'title', 'routine_name', 'routineName']) || '').trim();
+  return { name, blocks };
+}
+const planName = b => (b.kind === 'check' ? b.name : b.kind === 'ss' ? b.parts.map(p => p.name).join(' + ') : b.name);
+// The plan as routine blocks: exercises found by name (any case), new ones added, the rest from the usual defaults.
+function blocksFromPlan(plan) {
+  const slot = (p, inSs) => {
+    const ex = ensureEx(p.name, p.step); if (p.notes && !ex.notes) ex.notes = p.notes; saveEx(ex);
+    const o = Object.assign({ exId: ex.id }, slotDefaults(ex.id));
+    ['sets', 'lo', 'hi', 'range', 'rest', 'warm'].forEach(k => { if (p[k] != null) o[k] = p[k]; });
+    if (o.hi < o.lo) o.hi = o.lo;
+    if (inSs) delete o.rest;
+    return o;
+  };
+  return plan.blocks.map(b => b.kind === 'check' ? { kind: 'check', name: b.name, items: b.items } : b.kind === 'ss' ? { kind: 'ss', rest: b.rest, parts: b.parts.map(p => slot(p, true)) } : Object.assign({ kind: 'lift' }, slot(b, false)));
+}
+function pasteStatusHtml(sh) {
+  if (!String(sh.text || '').trim()) return '';
+  try { const p = readRoutineJson(sh.text); return '<span class="ok">' + ICON.check + esc(plural(p.blocks.length, 'item') + ': ' + p.blocks.map(planName).join(', ')) + '</span>'; }
+  catch (e) { return '<span class="' + (sh.tried ? 'bad' : '') + '">' + esc(e.message) + '</span>'; }
+}
+
 const A = {
   // today
   start: () => { const r = routineById(UI.sel) || suggestedRoutine(); if (r) startWorkout(r); },
@@ -447,6 +553,23 @@ const A = {
   slotMore: () => { UI.slotMore = true; render(); },
   ckSel: d => { UI.ckSel = UI.ckSel === +d.i ? null : +d.i; render(); },
   addMenu: () => openSheet({ type: 'addmenu' }),
+  // a routine from pasted JSON
+  pasteOpen: () => openSheet({ type: 'paste', text: '' }),
+  pasteClip: () => {
+    const sh = UI.sheet, fail = () => { const el = document.getElementById('paste-json'); if (el) el.focus(); toast('Couldn’t read the clipboard. Long-press the box and choose Paste.'); };
+    try { navigator.clipboard.readText().then(t => { if (UI.sheet !== sh) return; sh.text = t; sh.tried = true; render(); }, fail); } catch (e) { fail(); }
+  },
+  pasteExample: () => {
+    const sh = UI.sheet, fill = () => { sh.text = PASTE_EXAMPLE; sh.tried = false; render(); };
+    try { navigator.clipboard.writeText(PASTE_EXAMPLE).then(() => toast('Example copied.'), fill); } catch (e) { fill(); }
+  },
+  pasteAdd: () => {
+    const sh = UI.sheet, r = curRoutine(); if (!r) return;
+    let plan; try { plan = readRoutineJson(sh.text); } catch (e) { sh.tried = true; render(); return; }
+    r.blocks.push(...blocksFromPlan(plan));
+    if (plan.name && !String(r.name || '').trim()) r.name = plan.name;
+    UI.sheet = null; UI.focus = null; saveRoutine(r); render(); toast('Added ' + plural(plan.blocks.length, 'item') + '.');
+  },
   rMenu: () => openSheet({ type: 'rmenu' }),
   planNow: d => { const c = S.cur, t = nextOpen(c), bi = +d.bi; if (!t || bi === t.bi) { UI.sheet = null; render(); return; } const [b] = c.blocks.splice(bi, 1); c.blocks.splice(t.bi > bi ? t.bi - 1 : t.bi, 0, b); c.pick = null; c.fix = null; c.over = null; UI.sheet = null; UI.showWarm = false; UI.scrollToCard = true; touchCur(); render(); },
   planMove: d => { const c = S.cur, bi = +d.bi, j = bi + +d.d; if (j < 0 || j >= c.blocks.length || blockState(c.blocks[j]) !== 'open') return; [c.blocks[bi], c.blocks[j]] = [c.blocks[j], c.blocks[bi]]; c.pick = null; c.fix = null; touchCur(); render(); },
@@ -533,6 +656,7 @@ $app.addEventListener('keydown', e => {
 $app.addEventListener('input', e => {
   const el = e.target;
   if (el.id === 'notes') { const ex = exById(el.dataset.ex); if (ex) { ex.notes = el.value; saveEx(ex); } return; }
+  if (el.id === 'paste-json') { UI.sheet.text = el.value; UI.sheet.tried = false; const st = document.getElementById('paste-status'); if (st) st.innerHTML = pasteStatusHtml(UI.sheet); return; }
   if (el.id === 'pick-q') { UI.sheet.q = el.value; const pl = document.querySelector('.picklist'); if (pl) { pl.innerHTML = pickListHtml(); pl.parentNode.scrollTop = 0; } sheetEdges(); return; }
   const r = curRoutine(); if (!r) return;
   if (el.dataset.rf === 'name') { r.name = el.value; saveRoutine(r); return; }
@@ -874,7 +998,8 @@ function editScreen() {
     '<div class="etop"><button data-a="editDone">' + ICON.back + 'Today</button><span class="etop-r"><button class="dots3" data-a="rMenu" aria-label="Routine options">•••</button><button data-a="editDone">Done</button></span></div>' +
     '<input id="r-name" class="pin" autocapitalize="sentences" enterkeyhint="done" data-rf="name" value="' + esc(r.name) + '" placeholder="Routine name" aria-label="Routine name" autocomplete="off">' +
     (rows ? '<div class="blks" data-drag-list="blocks">' + rows + '</div>' : '') +
-    '<button class="addone" data-a="addMenu">' + ICON.plus + 'Add</button></div>';
+    '<button class="addone" data-a="addMenu">' + ICON.plus + 'Add</button>' +
+    (rows ? '' : '<button class="ghost ink" data-a="pasteOpen">Paste JSON</button>') + '</div>';
 }
 // Exercises in the order they were done (Do now can change it), by each one's first logged set.
 function liftsInOrderDone(s) {
@@ -1131,6 +1256,14 @@ function rMenuSheet() {
     (rs.length > 1 ? row('moveRoutine', 'Move up in the list', ' data-d="-1"' + (pos === 0 ? ' disabled' : '')) + row('moveRoutine', 'Move down in the list', ' data-d="1"' + (pos === rs.length - 1 ? ' disabled' : '')) : '') +
     row('dupRoutine', 'Duplicate') + '<button class="menurow danger" data-a="delRoutine"><span>Delete</span></button></div>', '<button class="wide" data-a="close">Close</button>');
 }
+function pasteSheet() {
+  const sh = UI.sheet;
+  return sheetBox('Paste JSON', '',
+    '<div class="pasterow"><button class="ghost" data-a="pasteClip" aria-label="Paste from clipboard">Paste</button><button class="ghost" data-a="pasteExample">Copy example</button></div>' +
+    '<textarea id="paste-json" class="pastebox" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Routine as JSON" placeholder="{ &quot;name&quot;: &quot;Push day&quot;, &quot;items&quot;: [ … ] }">' + esc(sh.text || '') + '</textarea>' +
+    '<p class="pastest" id="paste-status" role="status">' + pasteStatusHtml(sh) + '</p>',
+    '', { title: 'Paste JSON', cancel: 'close', done: 'pasteAdd' });
+}
 function backupSheet() {
   const t = S.settings.lastBackup;
   return sheetBox('Backup', '<h2>Backup</h2><p class="dim" style="margin-top:4px">' + esc(t ? 'Last one ' + dateTxt(t) + '.' : 'No backup yet.') + ' Your workouts only live on this phone.</p>', '',
@@ -1142,7 +1275,7 @@ function backupSheet() {
 function sheetHtml() {
   const sh = UI.sheet; if (!sh) return '';
   const ty = sh.type, c = S.cur;
-  if (UI.screen === 'edit') return ty === 'pick' ? pickSheet() : ty === 'slot' ? slotSheet() : ty === 'ss' ? ssSheet() : ty === 'check' ? checkSheet() : ty === 'addmenu' ? addMenuSheet() : ty === 'rmenu' ? rMenuSheet() : '';
+  if (UI.screen === 'edit') return ty === 'pick' ? pickSheet() : ty === 'slot' ? slotSheet() : ty === 'ss' ? ssSheet() : ty === 'check' ? checkSheet() : ty === 'addmenu' ? addMenuSheet() : ty === 'rmenu' ? rMenuSheet() : ty === 'paste' ? pasteSheet() : '';
   if (ty === 'session') return sessionSheet();
   if (ty === 'backup') return backupSheet();
   if (!c) return '';

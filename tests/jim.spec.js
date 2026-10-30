@@ -549,3 +549,61 @@ test('a new exercise reads cleanly before it has a weight, and the summary keeps
   await expect(page.locator('.sheet .hrow').nth(0)).toContainText('Seated row10 @ 40 kg');
   await expect(page.locator('.sheet .hrow').nth(1)).toContainText('4 @ 62.5 kg');
 });
+
+test.describe('a routine from pasted JSON', () => {
+  test('takes messy AI output, matches exercises you already have, and fills the routine', async ({ page }) => {
+    const { tap } = await open(page, { seed: backup });
+    await tap('New routine');
+    await tap('Paste JSON');
+    const messy = 'Here you go:\n```json\n{ “name”: “Push day”, "items": [\n' +
+      ' {"checklist": "Warm-up", "items": [{"text": "Easy bike", "timer": 5}, "Band pull-aparts | 2 × 15"]},\n' +
+      ' {"exercise": "bench press", "sets": 4, "reps": "4–6", "rest": "3 min", "warmups": 3},\n' +
+      ' {"exercise": "Cable fly", "sets": 3, "reps": 12, "rest": 60,},\n' +
+      ' {"superset": [{"exercise": "Lateral raise", "sets": 3, "reps": "12-15"}, {"exercise": "Triceps pushdown", "sets": 3, "reps": "10 to 12"}], "rest": "90s"},\n' +
+      ']}\n```\nLet me know if you want changes!';
+    await page.locator('#paste-json').fill(messy);
+    await expect(page.locator('#paste-status')).toContainText('4 items: Warm-up, bench press, Cable fly, Lateral raise + Triceps pushdown');
+    await tap('Done');
+    await expect(page.locator('.sheet')).toHaveCount(0);
+    await expect(page.locator('#r-name')).toHaveValue('Push day');
+    const rows = page.locator('.blk');
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toContainText('Easy bike, Band pull-aparts');
+    await expect(rows.nth(1)).toContainText('Bench press'); // your existing exercise, not a new "bench press"
+    await expect(rows.nth(1)).toContainText('4 × 4–6, rest 3:00, 3 warm-ups');
+    await expect(rows.nth(2)).toContainText('3 × 12, rest 1:00');
+    await expect(rows.nth(3)).toContainText('Superset, 3 × 12–15, 3 × 10–12, rest 1:30');
+    await expect(page.getByRole('button', { name: 'Paste JSON' }), 'only offered on an empty routine').toHaveCount(0);
+    const benches = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('jim.v3')).exercises).filter(x => x.name.toLowerCase() === 'bench press').length);
+    expect(benches).toBe(1);
+    await rows.nth(0).click();
+    await expect(page.locator('.ckchip')).toHaveText(['5 min', '×1']);
+    await expect(page.locator('[data-ci="1"][data-cf="detail"]')).toHaveValue('2 × 15');
+  });
+
+  test('says what is wrong and keeps the sheet open', async ({ page }) => {
+    const { tap } = await open(page, { seed: backup });
+    await tap('New routine');
+    await tap('Paste JSON');
+    await page.locator('#paste-json').fill('{"name": "x", "items": [{"sets": 3}]}');
+    await tap('Done');
+    await expect(page.locator('#paste-status .bad')).toHaveText('Item 1 has no exercise name.');
+    await page.locator('#paste-json').fill('bench 3x5');
+    await expect(page.locator('#paste-status')).toContainText('That isn’t JSON');
+    await tap('Cancel');
+    await expect(page.locator('.blk')).toHaveCount(0);
+  });
+
+  test('Copy example and Paste from clipboard work together', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    const { tap } = await open(page, { seed: backup });
+    await tap('New routine');
+    await tap('Paste JSON');
+    await tap('Copy example');
+    await tap('Paste from clipboard');
+    await expect(page.locator('#paste-status')).toContainText('4 items');
+    await tap('Done');
+    await expect(page.locator('#r-name')).toHaveValue('Push day');
+    await expect(page.locator('.blk')).toHaveCount(4);
+  });
+});

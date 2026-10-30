@@ -30,6 +30,27 @@ The tests run on a Pixel 7 profile and at 360 px wide. They cover building a rou
 
 Open that URL in Chrome, then go to **⋮ → Install app** (on some versions it's **Add to home screen → Install**). Launch it from the home screen and it runs full screen, even without signal.
 
+## Paste a routine as JSON
+
+Make a new routine and tap **Paste JSON**. **Copy example** puts a sample on the clipboard: give it to an AI chat along with your plan, then paste back the answer. **Paste** reads it from the clipboard. You'll see what it found before you tap **Done**.
+
+```json
+{
+  "name": "Push day",
+  "items": [
+    { "checklist": "Warm-up", "items": [{ "text": "Easy bike", "timer": 5 }, "Band pull-aparts | 2 × 15"] },
+    { "exercise": "Bench press", "sets": 4, "reps": "4-6", "rest": "3:00", "warmups": 3, "notes": "Pause the first rep" },
+    { "exercise": "Incline dumbbell press", "sets": 3, "reps": "8-12", "rest": 120 },
+    { "superset": [{ "exercise": "Lateral raise", "sets": 3, "reps": "12-15" }, { "exercise": "Triceps pushdown", "sets": 3, "reps": "10-12" }], "rest": 90 }
+  ]
+}
+```
+
+- Exercises are matched to the ones you already have by name, ignoring case. New names are added.
+- `reps` is a number (`8`) or a range (`"6-8"`, `"6 to 8"`). `rest` is in seconds (`90`), minutes (`"2 min"`, `3`), or `"2:30"`. Plain numbers of 9 or less count as minutes, the same as typing in the editor.
+- `warmups` goes from 0 to 4. Checklist items are text (`"Name | detail"`) or `{ "text", "detail", "ticks" }`, or `{ "text", "timer" }` with the timer in minutes.
+- Anything you leave out gets the usual defaults. Code fences, text around the JSON, curly quotes and trailing commas are all fine.
+
 ## Your data
 
 - Everything is stored in Chrome's storage for this site on the phone, under the keys `jim.v3` and `jim.v3.sessions`. Uninstalling the app or clearing Chrome's data for the site deletes it.
