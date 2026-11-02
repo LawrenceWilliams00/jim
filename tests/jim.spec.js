@@ -10,8 +10,8 @@ async function open(page, { seed } = {}) {
   if (seed) {
     await page.addInitScript(data => {
       if (localStorage.getItem('jim.v3')) return;
-      const { exercises, routines, sessions, settings } = JSON.parse(data);
-      localStorage.setItem('jim.v3', JSON.stringify({ exercises, routines, settings, cur: null }));
+      const { exercises, routines, sessions, settings, plans, weights } = JSON.parse(data);
+      localStorage.setItem('jim.v3', JSON.stringify({ exercises, routines, settings, plans, weights, cur: null }));
       localStorage.setItem('jim.v3.sessions', JSON.stringify(sessions));
     }, seed);
   }
@@ -784,5 +784,108 @@ test.describe('plans', () => {
     await page.locator('#paste-json').fill('[{"name": "Arms", "items": ["Curl"]}, {"name": "Core", "items": [{"exercise": "Plank", "sets": 3, "reps": 1}]}]');
     await tap('Done');
     await expect(page.locator('.blk b')).toHaveText(['Push', 'Pull', 'Legs', 'Arms', 'Core']);
+  });
+});
+
+test.describe('progress and bodyweight', () => {
+  const at = t => new Date(t).getTime();
+  // A week at 81 kg, then a week at 80 kg, weighed at 7 am, up to the day before the test's "today" (Wed 28 Oct).
+  const weights = [];
+  for (let d = 14; d <= 27; d++) weights.push({ id: 'w' + d, at: at('2026-10-' + d + 'T07:00:00'), kg: d <= 20 ? 81 : 80 });
+  const lift = (exId, name, sets) => ({ kind: 'lift', exId, key: exId, name, step: 2.5, lo: 4, hi: 10, rest: 0, sets: sets.map(([reps, kg]) => ({ kind: 'work', reps, kg, done: true, skipped: false, touched: true, type: 0 })) });
+  const sess = (id, when, blocks) => ({ id, routineId: 'rA', name: 'Day A', startedAt: at(when) - 3600e3, endedAt: at(when), updatedAt: at(when), blocks });
+  const seed = (() => {
+    const s = JSON.parse(backup);
+    s.exercises['x-pull-up'] = { id: 'x-pull-up', name: 'Pull-up', step: 2.5, equip: 'bodyweight', updatedAt: 1 };
+    s.sessions.push(sess('s2', '2026-10-21T18:00:00', [lift('x-pull-up', 'Pull-up', [[8, 0], [8, 0]])]));
+    s.sessions.push(sess('s3', '2026-10-27T18:00:00', [lift('x-bench-press', 'Bench press', [[5, 65], [5, 65]]), lift('x-pull-up', 'Pull-up', [[10, 0], [9, 0]])]));
+    s.weights = weights; s.settings = Object.assign({}, s.settings, { equipGuessed: true });
+    return JSON.stringify(s);
+  })();
+
+  test('bodyweight is logged from Today, can be changed or deleted, and Settings picks the average', async ({ page }) => {
+    const { tap } = await open(page, { seed });
+    const row = page.locator('.wrow');
+    await expect(row).toContainText('Bodyweight · 7-day average');
+    await expect(row).toContainText('80 kg');
+    await expect(row).toContainText('−0.5 kg/week');
+
+    await page.getByRole('button', { name: 'Log today’s weight' }).click();
+    await expect(page.locator('.sheet .padval'), 'the last weigh-in shows as a starting point').toContainText('80');
+    await expect(page.locator('.sheet').getByRole('button', { name: 'Save' }), 'nothing typed yet').toBeDisabled();
+    for (const k of '78.5') await page.locator(`.sheet .keys button[data-k="${k}"]`).click();
+    await tap('Save');
+    await expect(row).toContainText('79.8 kg'); // six days at 80 and today at 78.5
+    await expect(row.getByRole('button', { name: 'Change today’s weight, 78.5 kg' })).toContainText('Logged');
+
+    // Logging again changes today's weigh-in rather than adding another.
+    await row.getByRole('button').click();
+    await tap('Take off 0.5'); await tap('Save');
+    await expect(row.getByRole('button')).toHaveAccessibleName('Change today’s weight, 78 kg');
+    await row.getByRole('button').click();
+    await tap('Delete this weigh-in');
+    await expect(page.locator('.toast')).toContainText('Deleted 78 kg');
+    await expect(row.getByRole('button')).toHaveAccessibleName('Log today’s weight');
+    await tap('Undo');
+    await expect(row.getByRole('button')).toHaveAccessibleName('Change today’s weight, 78 kg');
+
+    // Settings: the weighted average, and a goal.
+    await tap('Settings');
+    await tap('Weighted');
+    await expect(page.locator('.note2')).toContainText('the most recent the most');
+    await tap('Goal weight', false);
+    for (const k of '75') await page.locator(`.sheet .keys button[data-k="${k}"]`).click();
+    await tap('Save');
+    await expect(page.locator('.srow', { hasText: 'Goal weight' })).toContainText('75 kg');
+    await tap('Today', false);
+    await expect(row).toContainText('Bodyweight · weighted average');
+
+    // The bodyweight page: the trend, the goal and every weigh-in.
+    await page.locator('.tabbar').getByRole('button', { name: 'Progress' }).click();
+    await page.locator('.pcard', { hasText: 'Bodyweight' }).click();
+    await expect(page.locator('.ptitle')).toHaveText('Bodyweight');
+    await expect(page.locator('.goalbox')).toContainText('to your goal of 75 kg');
+    await expect(page.locator('.chart')).toHaveCount(1);
+    await expect(page.locator('.entry').first()).toContainText('78 kg');
+    await page.goBack();
+    await expect(page.locator('.h1')).toHaveText('Progress');
+  });
+
+  test('Progress shows the week, lifts by est. 1RM, records, and each page goes back where it came from', async ({ page }) => {
+    const { tap } = await open(page, { seed });
+    await page.locator('.tabbar').getByRole('button', { name: 'Progress' }).click();
+    await expect(page.locator('.pcard', { hasText: 'This week' })).toContainText('1 workout');
+    // Bench: 5 × 65 kg is an est. 1RM of 75.8 kg. Pull-ups count your 80 kg: 10 reps is 106.7 kg.
+    await expect(page.locator('.lrow', { hasText: 'Bench press' })).toContainText('75.8 kg');
+    await expect(page.locator('.lrow', { hasText: 'Pull-up' })).toContainText('106.7 kg');
+    await expect(page.locator('.recs')).toContainText('65 kg × 5 · est. 1RM 75.8 kg');
+    await expect(page.locator('.recs')).toContainText('10 reps at bodyweight');
+
+    await page.locator('.lrow', { hasText: 'Bench press' }).click();
+    await expect(page.locator('.ptitle')).toHaveText('Bench press');
+    await expect(page.locator('.hero-num')).toContainText('75.8');
+    await tap('Top weight');
+    await expect(page.locator('.hero-num b')).toHaveText('65');
+    await page.goBack();
+    await expect(page.locator('.h1')).toHaveText('Progress');
+
+    // A lift opened from Records goes back to Records.
+    await page.locator('.secrow', { hasText: 'Latest records' }).getByRole('button', { name: 'All' }).click();
+    await expect(page.locator('.ptitle')).toHaveText('Records');
+    await tap('Est. 1RM');
+    await page.locator('.rec', { hasText: 'Pull-up' }).click();
+    await expect(page.locator('.ptop')).toContainText('Records');
+    await page.goBack();
+    await expect(page.locator('.ptitle')).toHaveText('Records');
+    await page.goBack();
+    await expect(page.locator('.h1')).toHaveText('Progress');
+
+    await page.locator('.pcard', { hasText: 'This week' }).click();
+    await expect(page.locator('.weeksw')).toContainText('This week');
+    await tap('Previous week');
+    await expect(page.locator('.weeksw')).toContainText('Last week');
+    await tap('Progress', false);
+    await page.goBack();
+    await expect(page.locator('.h1'), 'back from Progress is Today').toHaveText('Today');
   });
 });

@@ -43,7 +43,7 @@ const ICON = {
 };
 
 // ---------- state ----------
-let S = { exercises: {}, routines: [], plans: [], sessions: [], settings: { sound: true, rangeMode: true }, cur: null };
+let S = { exercises: {}, routines: [], plans: [], weights: [], sessions: [], settings: { sound: true, rangeMode: true }, cur: null };
 const UI = { screen: 'today', sheet: null, toast: null, sel: null, editId: null, confirm: null, scrollToCard: false, lastLog: null, summary: null };
 (function loadLocal() {
   try {
@@ -53,6 +53,7 @@ const UI = { screen: 'today', sheet: null, toast: null, sel: null, editId: null,
       S = Object.assign(S, o);
       S.exercises = o.exercises || {};
       S.plans = Array.isArray(o.plans) ? o.plans : [];
+      S.weights = Array.isArray(o.weights) ? o.weights : [];
       S.settings = Object.assign({ sound: true, rangeMode: true }, o.settings || {});
     }
     const rs = localStorage.getItem(STORE_SESSIONS);
@@ -273,7 +274,7 @@ function deleteSession(id) { S.sessions = S.sessions.filter(s => s.id !== id); s
 // ---------- backup ----------
 const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 function backupFile() {
-  const data = { app: 'jim', version: 3, exportedAt: now(), exercises: S.exercises, routines: S.routines, plans: S.plans, sessions: S.sessions, settings: S.settings };
+  const data = { app: 'jim', version: 3, exportedAt: now(), exercises: S.exercises, routines: S.routines, plans: S.plans, weights: S.weights, sessions: S.sessions, settings: S.settings };
   return new File([JSON.stringify(data)], 'jim-backup-' + ymd(new Date()) + '.json', { type: 'application/json' });
 }
 const canShareFile = () => { try { return !!(navigator.canShare && navigator.canShare({ files: [backupFile()] })); } catch (e) { return false; } };
@@ -286,12 +287,13 @@ function restoreFrom(o) {
   const [xs] = merge(Object.values(S.exercises), Object.values(o.exercises || {}));
   const [rs, nr] = merge(S.routines, o.routines);
   const [ps, np] = merge(S.plans || [], o.plans); S.plans = ps;
+  const [wts, nw] = merge(S.weights || [], o.weights); S.weights = wts;
   if (!activePlan() && o.settings && planById(o.settings.plan)) S.settings.plan = o.settings.plan;
   const [ss, ns] = merge(S.sessions, o.sessions);
   S.exercises = Object.fromEntries(xs.map(x => [x.id, x])); S.routines = rs; S.sessions = ss;
   if (o.notes) S.notes = o.notes;
   migrate(); saveLocal(); saveSessionsLocal();
-  return { plans: np, routines: nr, sessions: ns };
+  return { plans: np, routines: nr, sessions: ns, weights: nw };
 }
 
 // ---------- sound + screen ----------
@@ -658,6 +660,34 @@ const A = {
   warmMode: d => { const t = sheetSlot(); if (!t) return; if (d.v === 'manual') t.warmMode = 'manual'; else delete t.warmMode; changed(); },
   ckSel: d => { UI.ckSel = UI.ckSel === +d.i ? null : +d.i; render(); },
   addMenu: () => openSheet({ type: 'addmenu' }),
+  // the Progress tab and its pages
+  tab: d => { UI.screen = d.v === 'progress' ? 'progress' : 'today'; UI.sheet = null; render(); },
+  pOpen: d => { UI.pFrom = UI.screen === 'plifts' || UI.screen === 'precords' ? UI.screen : null; if (d.id) { if (UI.pex !== d.id) UI.pexMetric = null; UI.pex = d.id; } UI.pexAll = false; UI.bwAll = false; if (d.v === 'pweeks') UI.pweek = null; UI.screen = d.v; UI.sheet = null; render(); },
+  pBack: () => { UI.screen = UI.screen === 'pex' && UI.pFrom ? UI.pFrom : 'progress'; UI.pFrom = null; UI.sheet = null; render(); },
+  pexMetric: d => { UI.pexMetric = d.v; render(); },
+  pexAll: () => { UI.pexAll = !UI.pexAll; render(); },
+  bwRange: d => { UI.bwRange = d.v; render(); },
+  bwAll: () => { UI.bwAll = !UI.bwAll; render(); },
+  recKind: d => { UI.recKind = d.v; render(); },
+  weekStep: d => { const cur = weekOf(now()); UI.pweek = Math.min(cur, weekAdd(UI.pweek || cur, +d.d)); render(); },
+  openSettings: () => { UI.screen = 'settings'; UI.sheet = null; render(); },
+  bwAvg: d => { S.settings.bwAvg = d.v === 'weighted' ? 'weighted' : 'simple'; saveSettings(); render(); },
+  soundSet: d => { S.settings.sound = d.v === 'on'; unlockAudio(); saveSettings(); render(); },
+  // weighing in: one weigh-in a day (logging again changes it); the goal uses the same pad
+  wLog: () => { const t = todaysWeigh(); openSheet({ type: 'wpad', field: 'kg', buf: '', id: t ? t.id : null }); },
+  wEdit: d => openSheet({ type: 'wpad', field: 'kg', buf: '', id: d.id }),
+  goalEdit: () => openSheet({ type: 'wpad', field: 'kg', buf: '', goal: true }),
+  wSave: () => {
+    const sh = UI.sheet, v = parseFloat(sh.buf); UI.sheet = null;
+    if (sh.buf !== '' && v >= 20 && v <= 400) {
+      if (sh.goal) { S.settings.goalKg = r2(v); saveSettings(); }
+      else { S.weights = S.weights || []; let w = sh.id && S.weights.find(x => x.id === sh.id); if (!w) { w = { id: uid('w'), at: now(), kg: 0 }; S.weights.push(w); } w.kg = r2(v); w.updatedAt = now(); saveLocal(); }
+      render();
+    } else if (sh.buf !== '') toast('That doesn’t look like a weight in kg.'); else render();
+  },
+  wDelete: () => { const sh = UI.sheet, w = (S.weights || []).find(x => x.id === sh.id); UI.sheet = null; if (!w) return render(); S.weights = S.weights.filter(x => x !== w); saveLocal(); UI.undoWeigh = w; toast('Deleted ' + fmt(w.kg) + ' kg, ' + dateTxt(w.at) + '.', 'undoWeigh'); },
+  undoWeigh: () => { const w = UI.undoWeigh; if (w) { S.weights.push(w); saveLocal(); } UI.undoWeigh = null; UI.toast = null; render(); },
+  goalClear: () => { S.settings.goalKg = null; saveSettings(); UI.sheet = null; render(); },
   // a routine from pasted JSON
   pasteOpen: () => openSheet({ type: 'paste', text: '' }),
   pasteClip: () => {
@@ -778,7 +808,7 @@ $app.addEventListener('change', e => {
   if (e.target.id !== 'restore-file' || !e.target.files || !e.target.files[0]) return;
   e.target.files[0].text().then(t => {
     const n = restoreFrom(JSON.parse(t)); UI.sheet = null; UI.sel = null; render();
-    const got = [n.plans && plural(n.plans, 'plan'), n.routines && plural(n.routines, 'routine'), n.sessions && plural(n.sessions, 'workout')].filter(Boolean);
+    const got = [n.plans && plural(n.plans, 'plan'), n.routines && plural(n.routines, 'routine'), n.sessions && plural(n.sessions, 'workout'), n.weights && plural(n.weights, 'weigh-in')].filter(Boolean);
     toast(got.length ? 'Restored ' + got.join(' and ') + '.' : 'Nothing new in that backup.');
   }).catch(() => toast('That file isn’t a Jim backup.'));
 });
@@ -909,7 +939,7 @@ document.addEventListener('pointercancel', e => { if (e.pointerId === drag.pid) 
 // Back keeps your changes, like Done; Cancel is there to throw them away.
 let hDepth = (history.state && history.state.d) || 0, ignorePop = 0;
 function syncHistory() {
-  let want = UI.screen === 'today' ? 0 : 1;
+  let want = UI.screen === 'today' ? 0 : PDETAIL.includes(UI.screen) ? 2 : 1;
   for (let s = UI.sheet; s; s = s.parent) want++;
   while (hDepth < want) { hDepth++; history.pushState({ d: hDepth }, ''); }
   if (hDepth > want) { ignorePop++; history.go(want - hDepth); hDepth = want; }
@@ -917,7 +947,8 @@ function syncHistory() {
 function goBack() {
   const sh = UI.sheet;
   if (sh) { if (UI.screen === 'edit') (sh.type === 'pick' ? A.pickCancel : A.done)(); else A.close(); return; }
-  if (UI.screen === 'edit') A.editDone(); else if (UI.screen === 'plan') A.planDone(); else if (UI.screen === 'train') A.toToday(); else if (UI.screen === 'summary') A.summaryDone(); else render();
+  if (PDETAIL.includes(UI.screen)) A.pBack(); else if (UI.screen === 'progress' || UI.screen === 'settings') A.tab({ v: 'today' });
+  else if (UI.screen === 'edit') A.editDone(); else if (UI.screen === 'plan') A.planDone(); else if (UI.screen === 'train') A.toToday(); else if (UI.screen === 'summary') A.summaryDone(); else render();
 }
 window.addEventListener('popstate', e => {
   if (ignorePop) { ignorePop--; return; }
@@ -1136,10 +1167,10 @@ function todayScreen() {
     else main = hero + list(plans.length ? 'Routines' : 'Other routines', loose.filter(r => r !== sel).map(rrow)) + list('Plans', plans.map(prow)) + buttons;
   }
   const hist = sortedSessions().slice(0, 6);
-  return '<div class="screen paperscreen">' +
-    '<p class="date">' + d.toLocaleDateString('en-NZ', { weekday: 'long' }) + ' ' + d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'long' }) + '</p><h1 class="h1">Today</h1>' + main +
+  return '<div class="screen paperscreen tabbed">' +
+    '<p class="date">' + d.toLocaleDateString('en-NZ', { weekday: 'long' }) + ' ' + d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'long' }) + '</p><h1 class="h1">Today</h1>' + weighRow() + main +
     (hist.length ? '<h2 class="h2">Recent</h2>' + hist.map(s => { const n = liftsOf(s).reduce((a, b) => a + b.sets.filter(x => x.kind === 'work' && x.done).length, 0); return '<button class="hist" data-a="openSession" data-id="' + esc(s.id) + '"><span><b>' + esc(dateTxt(s.endedAt)) + '</b> · ' + esc(s.name) + '</span><span>' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min, ' + n + ' sets</span></button>'; }).join('') : '') +
-    '<div class="foot"><span>' + esc(backupTxt()) + '</span><div><button data-a="backup">Backup</button><button data-a="sound" aria-pressed="' + S.settings.sound + '">Sound: ' + (S.settings.sound ? 'on' : 'off') + '</button></div></div></div>';
+    '<div class="foot"><span>' + esc(backupTxt()) + '</span><div><button data-a="backup">Backup</button><button data-a="openSettings">Settings</button></div></div></div>' + tabbarHtml('today');
 }
 // A plan: its name, its routines (drag to reorder, tap to edit), Use this plan, and Add.
 const gripHtml = '<span class="grip" data-grip aria-hidden="true">' + ICON.grip + '</span>';
@@ -1229,6 +1260,298 @@ function summaryScreen() {
     (skippedNames.length ? '<p class="skipline"><b>Skipped</b> ' + esc(skippedNames.join(', ')) + '</p>' : '') +
     '<button class="primary dark" style="width:100%;margin-top:20px" data-a="summaryDone">Done</button></div>';
 }
+
+// ---------- bodyweight ----------
+const DAY = 864e5;
+const dayKey = t => { const d = new Date(t); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
+const weighins = () => (S.weights || []).filter(w => w && w.kg > 0).slice().sort((a, b) => a.at - b.at);
+const todaysWeigh = () => { const k = dayKey(now()); return (S.weights || []).find(w => dayKey(w.at) === k) || null; };
+// The smoothed line. Default: the average of the last 7 days. Weighted (Settings): every weigh-in counts and recent ones
+// most, halving about every 4 days, so a missed day or two doesn't jolt it.
+function bwTrend() {
+  const list = weighins(), out = []; let ema = null, prev = 0;
+  list.forEach(w => {
+    let avg;
+    if (S.settings.bwAvg === 'weighted') { ema = ema == null ? w.kg : ema + (1 - Math.pow(0.85, Math.max(0.25, (w.at - prev) / DAY))) * (w.kg - ema); avg = ema; }
+    else { const win = list.filter(x => x.at > w.at - 7 * DAY && x.at <= w.at); avg = win.reduce((a, x) => a + x.kg, 0) / win.length; }
+    prev = w.at; out.push({ at: w.at, kg: w.kg, v: avg });
+  });
+  return out;
+}
+// Now: the average, the change a week (over up to 4 weeks, once there are 10+ days), and how far to the goal.
+function bwNow() {
+  const tr = bwTrend(); if (!tr.length) return null;
+  const last = tr[tr.length - 1], from = tr.find(x => x.at >= last.at - 28 * DAY) || tr[0], span = (last.at - from.at) / DAY;
+  const rate = span >= 10 ? (last.v - from.v) / (span / 7) : null;
+  const goal = S.settings.goalKg || null, toGo = goal ? last.v - goal : null;
+  const weeks = goal && rate && Math.abs(toGo) > 0.05 && Math.sign(rate) === -Math.sign(toGo) ? Math.ceil(Math.abs(toGo / rate)) : null;
+  return { avg: last.v, last: last.kg, lastAt: last.at, rate, goal, toGo, weeks, trend: tr };
+}
+// Your bodyweight on a day: the latest weigh-in up to that day, else the first one after it.
+function bwAt(t) { const l = weighins(); if (!l.length) return null; let b = null; for (const w of l) { if (dayKey(w.at) === dayKey(t) || w.at <= t) b = w; else break; } return (b || l[0]).kg; }
+const sgn = (v, d = 1) => { const p = Math.pow(10, d), x = Math.round(Math.abs(v) * p) / p; return (v < 0 && x ? '−' : '+') + fmt(x); };
+const kg1 = v => fmt(Math.round(v * 10) / 10);
+
+// ---------- progress ----------
+// Estimated 1-rep max from a set: weight × (1 + reps / 30); a single is just its weight.
+const est1 = (reps, kg) => (!kg || !reps ? 0 : reps === 1 ? kg : kg * (1 + reps / 30));
+const isBw = exId => (exById(exId) || {}).equip === 'bodyweight';
+const weekOf = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (d.getDay() + 6) % 7); return d.getTime(); };
+// n weeks on from a week's Monday (safe across daylight saving)
+const weekAdd = (ws, n) => weekOf(ws + n * 7 * DAY + DAY / 2);
+// Every session an exercise was in, oldest first: its best set, heaviest set and volume.
+// A bodyweight lift counts your bodyweight that day plus anything added (when you've logged your weight).
+function exSessions(exId) {
+  const out = [];
+  S.sessions.slice().sort((a, b) => (a.endedAt || 0) - (b.endedAt || 0)).forEach(s => liftsOf(s).forEach(b => {
+    if (b.exId !== exId) return;
+    const bw = isBw(exId) ? bwAt(s.endedAt) || 0 : 0;
+    const sets = b.sets.filter(x => x.kind === 'work' && x.done).map(x => ({ reps: x.reps, kg: x.kg || 0, load: (x.kg || 0) + bw }));
+    if (!sets.length) return;
+    const best = sets.reduce((a, x) => (est1(x.reps, x.load) > est1(a.reps, a.load) ? x : a));
+    const top = sets.reduce((a, x) => (x.load > a.load || (x.load === a.load && x.reps > a.reps) ? x : a));
+    out.push({ at: s.endedAt, name: s.name, sets, best, e1: est1(best.reps, best.load), top, vol: sets.reduce((a, x) => a + x.reps * x.load, 0), most: Math.max(...sets.map(x => x.reps)), bw, noLoad: !sets.some(x => x.load) });
+  }));
+  return out;
+}
+const METRIC = { e1: x => x.e1, top: x => x.top.load, vol: x => x.vol, reps: x => x.most };
+// What a lift is measured by: est. 1RM, unless you do it for high reps (the estimate isn't worth much past about 12),
+// then your top set; reps alone when there's no weight at all.
+function liftMetric(h) {
+  if (h.every(x => x.noLoad)) return 'reps';
+  const r = h.map(x => x.best.reps).sort((a, b) => a - b);
+  return r[Math.floor(r.length / 2)] > 12 ? 'top' : 'e1';
+}
+// The best each week. This week isn't over, so it only shows once it beats last week.
+function weekly(h, f) {
+  const m = new Map(); h.forEach(x => { const k = weekOf(x.at), v = f(x); if (!m.has(k) || v > m.get(k).v) m.set(k, { at: x.at, v }); }); // plotted on the day you did it
+  const out = [...m.values()].sort((a, b) => a.at - b.at), n = out.length;
+  if (n > 1 && weekOf(out[n - 1].at) === weekOf(now()) && out[n - 1].v < out[n - 2].v) out.pop();
+  return out;
+}
+// Lifts you've done, with a weekly line and the change over about four weeks; the most trained first.
+function liftsSummary() {
+  const ids = [...new Set(S.sessions.flatMap(s => liftsOf(s).map(b => b.exId)))], cut = weekOf(now()) - 28 * DAY;
+  return ids.map(id => {
+    const h = exSessions(id); if (!h.length) return null;
+    const m = liftMetric(h), wk = weekly(h, METRIC[m]), before = wk.filter(w => w.at <= cut);
+    return { id, name: exName(id), h, m, wk, cur: wk[wk.length - 1].v, chg: wk[wk.length - 1].v - (before.length ? before[before.length - 1].v : wk[0].v), recent: h.filter(x => x.at >= cut).length, last: h[h.length - 1].at };
+  }).filter(Boolean).sort((a, b) => b.recent - a.recent || b.h[b.h.length - 1].top.load - a.h[a.h.length - 1].top.load);
+}
+const liftVal = l => (l.m === 'reps' ? plural(Math.round(l.cur), 'rep') : kg1(l.cur) + ' kg');
+const MEASURE = { e1: 'est. 1RM', top: 'top set', reps: 'most reps' };
+const liftRow = l => '<button class="lrow" data-a="pOpen" data-v="pex" data-id="' + esc(l.id) + '"><span class="ln"><b>' + esc(l.name) + '</b><span>' + plural(l.h.length, 'session') + ' · ' + MEASURE[l.m] + '</span></span>' + (l.wk.length > 1 ? sparkSvg(l.wk.slice(-8).map(w => w.v)) : '') + '<span class="lv"><b>' + liftVal(l) + '</b><span>' + liftChg(l) + '</span></span></button>';
+const liftChg = l => (Math.abs(l.chg) < 0.05 ? '' : sgn(l.chg, 0) + (l.m === 'reps' ? ' reps' : ''));
+// Records: a session that beat every earlier one for that lift — its estimated 1RM, its heaviest weight, or more reps at a
+// weight you've lifted before (in that order of what's shown). Your first session with a lift isn't a record.
+function allRecords() {
+  const out = [], ids = [...new Set(S.sessions.flatMap(s => liftsOf(s).map(b => b.exId)))];
+  ids.forEach(id => {
+    const h = exSessions(id), useE = liftMetric(h) === 'e1', done = [];
+    let bestE = 0, bestKg = -1;
+    const repsFrom = kg => done.reduce((a, st) => (st.kg >= kg - 1e-9 ? Math.max(a, st.reps) : a), -1);
+    h.forEach((x, i) => {
+      let kind = null, set = null;
+      if (i && useE && x.e1 > bestE + 1e-9) { kind = 'e1'; set = x.best; }
+      else if (i && !x.noLoad && x.top.load > bestKg + 1e-9) { kind = 'kg'; set = x.top; }
+      else if (i) x.sets.forEach(st => { const was = repsFrom(st.kg); if (was >= 0 && st.reps > was && (!set || st.kg > set.kg || (st.kg === set.kg && st.reps > set.reps))) { kind = 'reps'; set = st; } });
+      if (kind) out.push({ at: x.at, id, kind, set, e1: x.e1, bw: isBw(id) });
+      bestE = Math.max(bestE, x.e1); bestKg = Math.max(bestKg, x.top.load); done.push(...x.sets);
+    });
+  });
+  return out.sort((a, b) => b.at - a.at);
+}
+const REC = { e1: 'Est. 1RM', kg: 'Weight', reps: 'Reps' };
+function recDetail(r) {
+  const st = r.set, w = r.bw ? (st.kg ? '+' + fmt(st.kg) + ' kg' : 'bodyweight') : fmt(st.kg) + ' kg';
+  return (r.bw ? plural(st.reps, 'rep') + ' at ' + w : w + ' × ' + st.reps) + (r.kind === 'e1' ? ' · est. 1RM ' + kg1(r.e1) + ' kg' : '');
+}
+// A week (Monday to Sunday): workouts, the days they were on, volume, working sets and time.
+function weekStats(ws) {
+  const we = weekAdd(ws, 1), ss = S.sessions.filter(s => s.endedAt >= ws && s.endedAt < we), days = new Set(ss.map(s => (new Date(s.endedAt).getDay() + 6) % 7));
+  let vol = 0, sets = 0;
+  ss.forEach(s => liftsOf(s).forEach(b => { const bw = isBw(b.exId) ? bwAt(s.endedAt) || 0 : 0; b.sets.forEach(x => { if (x.kind === 'work' && x.done) { sets++; vol += x.reps * ((x.kg || 0) + bw); } }); }));
+  return { n: ss.length, days, vol, sets, time: ss.reduce((a, s) => a + Math.max(0, (s.endedAt || 0) - (s.startedAt || 0)), 0) };
+}
+// The plan's target is one workout per routine in it each week.
+const planTarget = () => { const ap = activePlan(); return ap ? routinesIn(ap.id).length || null : null; };
+function streak() {
+  const tg = planTarget() || 1; let w = weekOf(now()), n = weekStats(w).n >= tg ? 1 : 0;
+  for (w = weekAdd(w, -1); n < 520 && weekStats(w).n >= tg; w = weekAdd(w, -1)) n++;
+  return n;
+}
+const hm = ms => { const m = Math.round(ms / 60000); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + String(m % 60).padStart(2, '0'); };
+const big = v => Math.round(v).toLocaleString('en-NZ');
+const dShort = t => { const d = new Date(t); return d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'short' }); };
+
+// ---------- charts (plain SVG, sized to the phone's width) ----------
+function niceTicks(lo, hi) { const st = [0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200, 250, 500].find(s => (hi - lo) / s <= 4) || 1000, out = []; for (let v = Math.ceil(lo / st) * st; v <= hi + 1e-9; v += st) out.push(r2(v)); return out; }
+function lineSvg(o) {
+  const w = 360, h = o.h || 190, pl = 36, pr = 10, pt = 14, pb = 22, iw = w - pl - pr, ih = h - pt - pb;
+  const pts = o.line, dots = o.dots || [], all = pts.concat(dots).map(p => p.v).concat(o.goal != null ? [o.goal] : []);
+  let lo = Math.min(...all), hi = Math.max(...all); const pad = Math.max((hi - lo) * 0.12, o.minPad || 1); lo -= pad; hi += pad;
+  const ts = pts.concat(dots).map(p => p.at), t0 = Math.min(...ts), t1 = Math.max(...ts), span = Math.max(DAY, t1 - t0);
+  const X = t => pl + iw * (t - t0) / span, Y = v => pt + ih * (1 - (v - lo) / (hi - lo));
+  let g = '<svg class="chart" viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="' + esc(o.label || 'Chart') + '">';
+  niceTicks(lo, hi).forEach(v => { g += '<line x1="' + pl + '" x2="' + (w - pr) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="cg"/><text x="' + (pl - 6) + '" y="' + (Y(v) + 4).toFixed(1) + '" text-anchor="end" class="ct">' + fmt(v) + '</text>'; });
+  [[t0, 'start'], [t0 + span / 2, 'middle'], [t1, 'end']].forEach(([t, a], k) => { if (k === 1 && span < 6 * DAY) return; g += '<text x="' + X(t).toFixed(1) + '" y="' + (h - 5) + '" text-anchor="' + a + '" class="ct">' + dShort(t) + '</text>'; });
+  if (o.goal != null) g += '<line x1="' + pl + '" x2="' + (w - pr) + '" y1="' + Y(o.goal).toFixed(1) + '" y2="' + Y(o.goal).toFixed(1) + '" class="cgoal"/><text x="' + (w - pr) + '" y="' + (Y(o.goal) - 5).toFixed(1) + '" text-anchor="end" class="ctg">Goal ' + fmt(o.goal) + '</text>';
+  dots.forEach(p => { g += '<circle cx="' + X(p.at).toFixed(1) + '" cy="' + Y(p.v).toFixed(1) + '" r="2.6" class="cdot"/>'; });
+  if (pts.length > 1) g += '<path d="' + pts.map((p, i) => (i ? 'L' : 'M') + X(p.at).toFixed(1) + ',' + Y(p.v).toFixed(1)).join(' ') + '" class="cline"/>';
+  if (pts.length === 1) g += '<circle cx="' + X(pts[0].at).toFixed(1) + '" cy="' + Y(pts[0].v).toFixed(1) + '" r="4" class="cend"/>';
+  (o.gold || []).forEach(p => { g += '<circle cx="' + X(p.at).toFixed(1) + '" cy="' + Y(p.v).toFixed(1) + '" r="5" class="cgold"/>'; });
+  return g + '</svg>';
+}
+function sparkSvg(vals, w, h, goal) {
+  w = w || 96; h = h || 30;
+  const lo = Math.min(...vals, goal != null ? goal : Infinity), hi = Math.max(...vals, goal != null ? goal : -Infinity), rg = Math.max(1e-9, hi - lo);
+  const X = i => 3 + (w - 6) * (vals.length > 1 ? i / (vals.length - 1) : 1), Y = v => 4 + (h - 8) * (1 - (v - lo) / rg);
+  return '<svg class="spark" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" aria-hidden="true">' +
+    (goal != null ? '<line x1="0" x2="' + w + '" y1="' + Y(goal).toFixed(1) + '" y2="' + Y(goal).toFixed(1) + '" class="cgoal thin"/>' : '') +
+    (vals.length > 1 ? '<path d="' + vals.map((v, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ') + '" class="cline thin"/>' : '') +
+    '<circle cx="' + X(vals.length - 1).toFixed(1) + '" cy="' + Y(vals[vals.length - 1]).toFixed(1) + '" r="3" class="cend"/></svg>';
+}
+function barsSvg(vals, labels, target, hl) {
+  const w = 360, h = 150, pt = 16, pb = 20, bw = w / vals.length, mx = Math.max(...vals, target || 0, 1) + 0.4, Y = v => pt + (h - pt - pb) * (1 - v / mx);
+  let g = '<svg class="chart" viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="Workouts a week">';
+  if (target) g += '<line x1="0" x2="' + w + '" y1="' + Y(target).toFixed(1) + '" y2="' + Y(target).toFixed(1) + '" class="cgoal"/><text x="' + w + '" y="' + (Y(target) - 4).toFixed(1) + '" text-anchor="end" class="ctg">Plan: ' + target + ' a week</text>';
+  vals.forEach((v, i) => { const x = i * bw + bw * 0.2; g += '<rect x="' + x.toFixed(1) + '" y="' + Y(v).toFixed(1) + '" width="' + (bw * 0.6).toFixed(1) + '" height="' + Math.max(0, Y(0) - Y(v)).toFixed(1) + '" rx="4" class="' + (i === hl ? 'cbar hl' : 'cbar') + '"/><text x="' + (x + bw * 0.3).toFixed(1) + '" y="' + (h - 5) + '" text-anchor="middle" class="ct">' + labels[i] + '</text>'; });
+  return g + '</svg>';
+}
+
+// ---------- the Progress tab and its pages ----------
+const TAB_ICON = {
+  today: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11"/></svg>',
+  progress: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="M7 15l4-4 3 3 5-6"/></svg>',
+};
+const tabbarHtml = on => '<nav class="tabbar" aria-label="Sections">' + [['today', 'Today'], ['progress', 'Progress']].map(([k, l]) => '<button class="' + (k === on ? 'on' : '') + '" data-a="tab" data-v="' + k + '"' + (k === on ? ' aria-current="page"' : '') + '><span class="ti">' + TAB_ICON[k] + '</span>' + l + '</button>').join('') + '</nav>';
+const ptop = (back, right) => '<div class="ptop"><button data-a="pBack">' + ICON.back + back + '</button>' + (right || '') + '</div>';
+function dayDots(ws, st) {
+  const today = weekOf(now()) === ws ? (new Date(now()).getDay() + 6) % 7 : -1;
+  return '<span class="daydots" aria-label="' + plural(st.n, 'workout') + ' this week">' + 'MTWTFSS'.split('').map((l, i) => '<span>' + l + '<i class="' + (st.days.has(i) ? 'on' : i === today ? 'today' : '') + '">' + (st.days.has(i) ? ICON.check : '') + '</i></span>').join('') + '</span>';
+}
+// Today: your weight at a glance, and logging it.
+function weighRow() {
+  const b = bwNow(), t = todaysWeigh();
+  if (!b) return '<div class="wrow"><span class="wt"><span class="wl">Bodyweight</span><span class="wv sm">Log it to see your trend</span></span><button class="logbtn" data-a="wLog">Log</button></div>';
+  return '<div class="wrow' + (t ? ' done' : '') + '"><span class="wt"><span class="wl">Bodyweight · ' + (S.settings.bwAvg === 'weighted' ? 'weighted average' : '7-day average') + '</span><span class="wv">' + kg1(b.avg) + ' <small>kg</small></span>' + (b.rate != null ? '<span class="wd">' + sgn(b.rate) + ' kg/week</span>' : '') + '</span>' +
+    '<button class="logbtn" data-a="wLog" aria-label="' + (t ? 'Change today’s weight, ' + fmt(t.kg) + ' kg' : 'Log today’s weight') + '">' + (t ? 'Logged ' + ICON.check : 'Log') + '</button></div>';
+}
+function progressScreen() {
+  const ws = weekOf(now()), st = weekStats(ws), tg = planTarget(), sk = streak(), b = bwNow(), lifts = liftsSummary(), recs = allRecords();
+  const weekCard = '<button class="pcard" data-a="pOpen" data-v="pweeks"><span class="pc-h">This week' + ICON.chev + '</span><span class="pc-big"><b>' + st.n + ' <small>' + (tg ? 'of ' + tg + ' workouts' : plural(st.n, 'workout').replace(/^\d+ /, '')) + '</small></b>' +
+    (sk > 1 ? '<span class="chg">' + sk + '-week streak</span>' : tg && st.n >= tg ? '<span class="chg">On plan</span>' : '') + '</span>' + dayDots(ws, st) +
+    (st.n ? '<span class="pc-sub">' + big(st.vol) + ' kg lifted · ' + plural(st.sets, 'working set') + ' · ' + hm(st.time) + '</span>' : '') + '</button>';
+  const bodyCard = b ? '<button class="pcard" data-a="pOpen" data-v="pbody"><span class="pc-h">Bodyweight' + ICON.chev + '</span><span class="pc-row"><span style="flex:1;min-width:0"><span class="pc-big" style="margin-top:0"><b>' + kg1(b.avg) + ' <small>kg</small></b>' + (b.rate != null ? '<span class="chg">' + sgn(b.rate) + '/week</span>' : '') + '</span>' +
+    '<span class="pc-sub">' + (b.goal ? kg1(Math.abs(b.toGo)) + ' kg to ' + fmt(b.goal) + ' kg' + (b.weeks ? ' · about ' + plural(b.weeks, 'week') : '') : 'Set a goal in Settings') + '</span></span>' + (b.trend.length > 1 ? sparkSvg(b.trend.slice(-40).map(x => x.v), 110, 44, b.goal) : '') + '</span></button>'
+    : '<div class="pcard"><span class="pc-h">Bodyweight</span><span class="pc-sub" style="margin-top:6px">Log your weight on Today and your trend shows here.</span><button class="bigbtn sm" data-a="wLog">' + ICON.plus + 'Log weight</button></div>';
+  const lrow = liftRow;
+  const rrow = r => '<button class="rec" data-a="pOpen" data-v="pex" data-id="' + esc(r.id) + '"><span><b>' + esc(exName(r.id)) + '</b><span class="rs">' + esc(recDetail(r)) + ' · ' + dateTxt(r.at) + '</span></span><span class="kind' + (r.kind === 'e1' ? ' gold' : '') + '">' + REC[r.kind] + '</span></button>';
+  return '<p class="date">' + new Date(now()).toLocaleDateString('en-NZ', { weekday: 'long' }) + ' ' + new Date(now()).getDate() + ' ' + new Date(now()).toLocaleDateString('en-NZ', { month: 'long' }) + '</p><h1 class="h1">Progress</h1>' +
+    weekCard + bodyCard +
+    (lifts.length ? '<div class="secrow"><h2>Lifts</h2>' + (lifts.length > 4 ? '<button data-a="pOpen" data-v="plifts">All ' + lifts.length + '</button>' : '') + '</div><div class="lrows">' + lifts.slice(0, 4).map(lrow).join('') + '</div>'
+      : '<p class="note2" style="margin-top:22px">Finish a workout and your lifts show up here.</p>') +
+    (recs.length ? '<div class="secrow"><h2>Latest records</h2><button data-a="pOpen" data-v="precords">All</button></div><div class="recs">' + recs.slice(0, 2).map(rrow).join('') + '</div>' : '');
+}
+function pliftsScreen() {
+  const lifts = liftsSummary();
+  return ptop('Progress') + '<h1 class="ptitle">Lifts</h1><p class="note2">Your best each week: estimated 1RM, or your top set for lifts you do for more than 12 reps. Bodyweight lifts count your bodyweight.</p><div class="lrows" style="margin-top:8px">' +
+    lifts.map(liftRow).join('') + '</div>';
+}
+function pexScreen() {
+  const id = UI.pex, h = exSessions(id); if (!h.length) { UI.screen = 'progress'; return progressScreen(); }
+  const lm = liftMetric(h), reps = lm === 'reps', m = reps ? 'reps' : UI.pexMetric || lm, f = METRIC[m], wk = weekly(h, f), cur = wk[wk.length - 1].v, first = wk[0].v, weeks = Math.round((wk[wk.length - 1].at - wk[0].at) / (7 * DAY));
+  const unitTxt = m === 'reps' ? '' : ' kg', val = v => (m === 'reps' ? Math.round(v) : m === 'vol' ? big(v) : kg1(v));
+  let run = 0; const gold = m !== 'vol' ? h.filter((x, i) => { const g = i > 0 && f(x) > run + 1e-9; run = Math.max(run, f(x)); return g; }).map(x => ({ at: x.at, v: f(x) })) : [];
+  const cap = { e1: 'Estimated 1RM, from your best set each week', top: 'Your heaviest set each week', vol: 'Your biggest session each week, weight × reps', reps: 'Most reps in a set each week' }[m] + (isBw(id) && !reps ? '. Counts your bodyweight.' : '');
+  const bestE = h.reduce((a, x) => (x.e1 > a.e1 ? x : a)), heavy = h.reduce((a, x) => (x.top.load > a.top.load ? x : a)), mostR = h.reduce((a, x) => (x.most > a.most ? x : a)), bigS = h.reduce((a, x) => (x.vol > a.vol ? x : a));
+  const w = x => (isBw(id) ? (x.kg ? '+' + fmt(x.kg) + ' kg' : 'BW') : fmt(x.kg) + ' kg');
+  const mostSet = mostR.sets.reduce((a, x) => (x.reps > a.reps ? x : a));
+  const facts = reps ? '<div><b>' + mostR.most + ' <small>reps</small></b><span>Most in a set · ' + dShort(mostR.at) + '</span></div><div><b>' + h.length + '</b><span>Sessions</span></div>'
+    : (lm === 'e1' ? '<div><b>' + kg1(bestE.e1) + ' <small>kg</small></b><span>Best est. 1RM · ' + dShort(bestE.at) + '</span></div>' : '') + '<div><b>' + w(heavy.top) + ' <small>× ' + heavy.top.reps + '</small></b><span>Heaviest · ' + dShort(heavy.at) + '</span></div>' +
+      '<div><b>' + mostSet.reps + ' <small>reps @ ' + w(mostSet) + '</small></b><span>Most reps · ' + dShort(mostR.at) + '</span></div><div><b>' + big(bigS.vol) + ' <small>kg</small></b><span>Best session · ' + dShort(bigS.at) + '</span></div>' +
+      (lm === 'e1' ? '' : '<div><b>' + h.length + '</b><span>Sessions</span></div>');
+  const list = h.slice().reverse(), shown = UI.pexAll ? list : list.slice(0, 5);
+  return ptop(UI.pFrom === 'plifts' ? 'Lifts' : UI.pFrom === 'precords' ? 'Records' : 'Progress') + '<h1 class="ptitle">' + esc(exName(id)) + '</h1>' +
+    '<div class="hero-num"><b>' + val(cur) + '</b><small>' + (m === 'reps' ? 'reps' : 'kg') + '</small>' + (wk.length > 1 && Math.abs(cur - first) >= 0.05 ? '<span class="chg">' + sgn(cur - first, 0) + unitTxt + ' in ' + plural(Math.max(1, weeks), 'week') + '</span>' : '') + '</div>' +
+    '<p class="hero-cap">' + cap + '</p>' +
+    (reps ? '' : '<div class="chips2" role="group" aria-label="Measure">' + [['e1', 'Est. 1RM'], ['top', 'Top weight'], ['vol', 'Volume']].map(([k, l]) => '<button class="' + (k === m ? 'on' : '') + '" data-a="pexMetric" data-v="' + k + '" aria-pressed="' + (k === m) + '">' + l + '</button>').join('') + '</div>') +
+    lineSvg({ line: wk, dots: h.length > wk.length ? h.map(x => ({ at: x.at, v: f(x) })) : [], gold, label: cap }) +
+    '<div class="legend"><span><i></i>Best each week</span>' + (h.length > wk.length ? '<span><i class="dot"></i>Each session</span>' : '') + (gold.length ? '<span><i class="gold"></i>Record</span>' : '') + '</div>' +
+    '<div class="facts">' + facts + '</div>' +
+    '<div class="secrow"><h2>Sessions</h2>' + (list.length > 5 ? '<button data-a="pexAll">' + (UI.pexAll ? 'Fewer' : 'All ' + list.length) + '</button>' : '') + '</div>' +
+    shown.map(x => '<div class="sess"><span><b>' + dateTxt(x.at) + '</b><span class="sd">' + esc(x.name) + ' · ' + esc(setsLine(x.sets.map(s => ({ reps: s.reps, kg: isBw(id) ? s.kg : s.kg })))) + '</span></span><span class="sr">' + (reps ? plural(x.most, 'rep') : lm === 'e1' ? kg1(x.e1) + ' kg<span>est. 1RM</span>' : w(x.top) + ' × ' + x.top.reps + '<span>top set</span>') + '</span></div>').join('');
+}
+function pbodyScreen() {
+  const b = bwNow(), all = weighins();
+  if (!b) return ptop('Progress') + '<h1 class="ptitle">Bodyweight</h1><p class="note2">No weigh-ins yet.</p><button class="bigbtn" data-a="wLog">' + ICON.plus + 'Log weight</button>';
+  const rg = UI.bwRange || '3M', from = rg === 'All' ? 0 : b.lastAt - ({ '1M': 31, '3M': 92, '6M': 183 }[rg]) * DAY, tr = b.trend.filter(x => x.at >= from);
+  const eta = b.weeks ? new Date(now() + b.weeks * 7 * DAY) : null;
+  return ptop('Progress') + '<h1 class="ptitle">Bodyweight</h1>' +
+    '<div class="hero-num"><b>' + kg1(b.avg) + '</b><small>kg</small>' + (b.rate != null ? '<span class="chg">' + sgn(b.rate) + ' kg a week</span>' : '') + '</div>' +
+    '<p class="hero-cap">' + (S.settings.bwAvg === 'weighted' ? 'Weighted average' : '7-day average') + ' · last ' + fmt(b.last) + ' kg, ' + dateTxt(b.lastAt) + '</p>' +
+    '<div class="chips2" role="group" aria-label="Range">' + ['1M', '3M', '6M', 'All'].map(k => '<button class="' + (k === rg ? 'on' : '') + '" data-a="bwRange" data-v="' + k + '" aria-pressed="' + (k === rg) + '">' + k + '</button>').join('') + '</div>' +
+    lineSvg({ line: tr.map(x => ({ at: x.at, v: x.v })), dots: tr.map(x => ({ at: x.at, v: x.kg })), goal: b.goal, minPad: 0.5, label: 'Bodyweight' }) +
+    '<div class="legend"><span><i></i>Average</span><span><i class="dot"></i>Each weigh-in</span>' + (b.goal ? '<span><i class="dash"></i>Goal</span>' : '') + '</div>' +
+    (b.goal ? '<div class="goalbox"><span><b>' + (Math.abs(b.toGo) < 0.05 ? 'You’re at your goal of ' + fmt(b.goal) + ' kg' : kg1(Math.abs(b.toGo)) + ' kg to your goal of ' + fmt(b.goal) + ' kg') + '</b><span>' + (b.weeks ? 'About ' + plural(b.weeks, 'week') + ' at this rate, ' + (eta.getDate() <= 10 ? 'early' : eta.getDate() <= 20 ? 'mid' : 'late') + ' ' + eta.toLocaleDateString('en-NZ', { month: 'long' }) : b.rate == null ? 'A rate shows after 10 days of weigh-ins' : 'Not heading that way yet') + '</span></span><button data-a="goalEdit">Edit</button></div>'
+      : '<div class="goalbox"><span><b>No goal set</b><span>Add one to see how long it’ll take</span></span><button data-a="goalEdit">Set</button></div>') +
+    '<button class="bigbtn" data-a="wLog">' + ICON.plus + (todaysWeigh() ? 'Change today’s weight' : 'Log weight') + '</button>' +
+    '<div class="secrow"><h2>Weigh-ins</h2>' + (all.length > 6 ? '<button data-a="bwAll">' + (UI.bwAll ? 'Fewer' : 'All ' + all.length) + '</button>' : '') + '</div>' +
+    all.slice().reverse().slice(0, UI.bwAll ? 9999 : 6).map(w => '<button class="entry" data-a="wEdit" data-id="' + esc(w.id) + '"><span>' + dateTxt(w.at) + '</span><span>' + fmt(w.kg) + ' kg</span></button>').join('');
+}
+function pweeksScreen() {
+  const cur = weekOf(now()), ws = Math.min(UI.pweek || cur, cur), st = weekStats(ws), prev = weekStats(weekAdd(ws, -1)), tg = planTarget();
+  const first = S.sessions.length ? weekOf(Math.min(...S.sessions.map(s => s.endedAt || now()))) : cur;
+  const weeks = []; for (let k = -7; k <= 0; k++) weeks.push(weekAdd(cur, k));
+  const end = new Date(ws + 6 * DAY), start = new Date(ws);
+  const label = (ws === cur ? 'This week' : ws === weekAdd(cur, -1) ? 'Last week' : 'Week') + ' · ' + start.getDate() + (start.getMonth() !== end.getMonth() ? ' ' + start.toLocaleDateString('en-NZ', { month: 'short' }) : '') + ' – ' + dShort(end);
+  const dv = prev.vol ? Math.round((st.vol - prev.vol) / prev.vol * 100) : null, sk = streak();
+  return ptop('Progress') + '<h1 class="ptitle">Weeks</h1>' +
+    '<div class="weeksw"><button data-a="weekStep" data-d="-1" aria-label="Previous week"' + (ws <= first ? ' disabled' : '') + '>' + ICON.back + '</button><b>' + label + '</b><button data-a="weekStep" data-d="1" aria-label="Next week"' + (ws >= cur ? ' disabled' : '') + '>' + ICON.chev + '</button></div>' +
+    dayDots(ws, st).replace('class="daydots"', 'class="daydots wide"') +
+    '<div class="facts"><div><b>' + st.n + (tg ? ' <small>of ' + tg + '</small>' : '') + '</b><span>Workouts' + (tg ? (st.n >= tg ? ', on plan' : '') : '') + '</span></div><div><b>' + big(st.vol) + ' <small>kg</small></b><span>Volume' + (dv != null && st.n && ws < cur ? ' · ' + (dv >= 0 ? '+' : '−') + Math.abs(dv) + '% on the week before' : '') + '</span></div>' +
+    '<div><b>' + st.sets + '</b><span>Working sets</span></div><div><b>' + (st.time ? hm(st.time) : '0 min') + '</b><span>Time training</span></div></div>' +
+    '<div class="secrow"><h2>Workouts a week</h2></div>' + barsSvg(weeks.map(w => weekStats(w).n), weeks.map((w, i) => (i % 2 === 1 || i === weeks.length - 1 ? '' : dShort(w))), tg, weeks.indexOf(ws)) +
+    (sk > 1 ? '<p class="note2">' + sk + ' weeks in a row ' + (tg ? 'on plan' : 'with a workout') + '.</p>' : '');
+}
+function precordsScreen() {
+  const k = UI.recKind || 'all', recs = allRecords().filter(r => k === 'all' || r.kind === k), cur = weekOf(now());
+  const groups = [];
+  recs.forEach(r => { const w = weekOf(r.at), name = w === cur ? 'This week' : w === weekAdd(cur, -1) ? 'Last week' : dShort(w) + ' – ' + dShort(w + 6 * DAY); const g = groups[groups.length - 1]; if (g && g.name === name) g.rows.push(r); else groups.push({ name, rows: [r] }); });
+  return ptop('Progress') + '<h1 class="ptitle">Records</h1>' +
+    '<div class="chips2" role="group" aria-label="Kind">' + [['all', 'All'], ['e1', 'Est. 1RM'], ['kg', 'Weight'], ['reps', 'Reps']].map(([v, l]) => '<button class="' + (v === k ? 'on' : '') + '" data-a="recKind" data-v="' + v + '" aria-pressed="' + (v === k) + '">' + l + '</button>').join('') + '</div>' +
+    (groups.length ? groups.map(g => '<p class="dhead">' + g.name + '</p>' + g.rows.map(r => '<button class="rec" data-a="pOpen" data-v="pex" data-id="' + esc(r.id) + '"><span><b>' + esc(exName(r.id)) + '</b><span class="rs">' + esc(recDetail(r)) + ' · ' + dateTxt(r.at) + '</span></span><span class="kind' + (r.kind === 'e1' ? ' gold' : '') + '">' + REC[r.kind] + '</span></button>').join('')).join('')
+      : '<p class="note2">No records yet. They show up once you beat a lift’s earlier sessions.</p>');
+}
+function settingsScreen() {
+  const seg = (a, opts, on) => '<div class="pseg" role="group">' + opts.map(([v, l]) => '<button class="' + (v === on ? 'on' : '') + '" data-a="' + a + '" data-v="' + v + '" aria-pressed="' + (v === on) + '">' + l + '</button>').join('') + '</div>';
+  const avg = S.settings.bwAvg === 'weighted' ? 'weighted' : 'simple';
+  return '<div class="ptop"><button data-a="tab" data-v="today">' + ICON.back + 'Today</button></div><h1 class="ptitle">Settings</h1>' +
+    '<p class="dhead">Bodyweight</p>' +
+    '<div class="srow"><span>Average</span>' + seg('bwAvg', [['simple', '7-day'], ['weighted', 'Weighted']], avg) + '</div>' +
+    '<p class="note2 tight">' + (avg === 'weighted' ? 'Weighted: every weigh-in counts, the most recent the most, so a missed day doesn’t jolt the line.' : '7-day: the plain average of your weigh-ins over the last 7 days.') + '</p>' +
+    '<button class="srow" data-a="goalEdit"><span>Goal weight</span><span class="sv">' + (S.settings.goalKg ? fmt(S.settings.goalKg) + ' kg' : 'None') + ICON.chev + '</span></button>' +
+    '<p class="dhead">Workouts</p>' +
+    '<div class="srow"><span>Sound when rest ends</span>' + seg('soundSet', [['on', 'On'], ['off', 'Off']], S.settings.sound ? 'on' : 'off') + '</div>' +
+    '<p class="dhead">Your data</p>' +
+    '<button class="srow" data-a="backup"><span>Backup</span><span class="sv">' + esc(backupTxt()) + ICON.chev + '</span></button>';
+}
+// Logging a weight, or setting the goal: the number pad.
+function wpadSheet() {
+  const sh = UI.sheet, entry = sh.id ? (S.weights || []).find(w => w.id === sh.id) : null, last = weighins().filter(w => !entry || w.id !== entry.id).pop();
+  const cur = sh.goal ? S.settings.goalKg || null : entry ? entry.kg : null, base = sh.buf !== '' ? parseFloat(sh.buf) || 0 : cur != null ? cur : last ? last.kg : null;
+  const title = sh.goal ? 'Goal weight, kg' : 'Bodyweight, kg · ' + (entry ? dateTxt(entry.at) : 'today');
+  const shown = sh.buf !== '' ? sh.buf : cur != null ? fmt(cur) : last ? fmt(last.kg) : '—';
+  const chips = [-0.5, -0.1, 0.1, 0.5].map(d => '<button data-a="padSet" data-v="' + (base == null ? '' : r2(base + d)) + '" aria-label="' + (d > 0 ? 'Add ' : 'Take off ') + fmt(Math.abs(d)) + '">' + (d > 0 ? '+' : '−') + fmt(Math.abs(d)) + '</button>').join('');
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del'].map(k => k === 'del' ? '<button data-a="key" data-k="del" aria-label="Delete">' + ICON.del + '</button>' : '<button data-a="key" data-k="' + k + '"' + (k === '.' ? ' aria-label="Decimal point"' : '') + '>' + k + '</button>').join('');
+  return sheetBox(title,
+    '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:14px;gap:8px"><span class="dim" style="font-weight:500">' + esc(title) + '</span><span class="dim small">' + (!sh.goal && last ? 'Last ' + fmt(last.kg) : '') + '</span></div>',
+    '<div class="padval"><span style="color:' + (sh.buf !== '' ? 'var(--cream)' : 'var(--half)') + '">' + esc(shown) + '</span><span class="caret" aria-hidden="true"></span></div>' +
+    '<div class="chips"' + (base == null ? ' style="visibility:hidden" aria-hidden="true"' : '') + '>' + chips + '</div><div class="keys">' + keys + '</div>',
+    '<button class="primary" data-a="wSave"' + (sh.buf === '' && cur == null ? ' disabled' : '') + '>Save</button>' + (entry ? '<button class="wide danger" data-a="wDelete">Delete this weigh-in</button>' : '') + (sh.goal && S.settings.goalKg ? '<button class="wide" data-a="goalClear">Clear the goal</button>' : ''));
+}
+const PSCREENS = { progress: progressScreen, plifts: pliftsScreen, pex: pexScreen, pbody: pbodyScreen, pweeks: pweeksScreen, precords: precordsScreen, settings: settingsScreen };
+const PDETAIL = ['plifts', 'pex', 'pbody', 'pweeks', 'precords'];
 
 // ---------- sheets ----------
 // A stepper row. The number between − and + is a field too: tap it and type.
@@ -1477,6 +1800,7 @@ function sheetHtml() {
   if (UI.screen === 'plan') return ty === 'padd' ? planAddSheet() : ty === 'pmenu' ? planMenuSheet() : ty === 'paste' ? pasteSheet() : '';
   if (ty === 'session') return sessionSheet();
   if (ty === 'backup') return backupSheet();
+  if (ty === 'wpad') return wpadSheet();
   if (!c) return '';
   if (ty === 'plan') return planSheet();
   return ty === 'pad' ? padSheet() : ty === 'change' ? changeSheet() : ty === 'ex' ? exSheet() : ty === 'finish' ? finishSheet() : '';
@@ -1494,6 +1818,7 @@ function render() {
   if (UI.screen === 'summary') { html = summaryScreen(); cls = 'paper'; }
   else if (UI.screen === 'edit') { html = editScreen(); cls = 'paper'; }
   else if (UI.screen === 'plan') { html = planScreen(); cls = 'paper'; }
+  else if (PSCREENS[UI.screen]) { html = '<div class="screen paperscreen' + (UI.screen === 'progress' ? ' tabbed' : '') + '">' + PSCREENS[UI.screen]() + '</div>' + (UI.screen === 'progress' ? tabbarHtml('progress') : ''); cls = 'paper'; }
   else if (UI.screen === 'train' && c) {
     const t = nextOpen(c);
     if (!t) { finish(); return; }
@@ -1507,6 +1832,7 @@ function render() {
   render.sheetObj = UI.sheet;
   if (UI.toast) html += '<div class="toast' + (UI.screen === 'train' ? ' top' : '') + '" role="status"><span>' + esc(UI.toast.text) + '</span>' + (UI.toast.act ? '<button data-a="' + UI.toast.act + '">Undo</button>' : '') + '</div>';
   $app.innerHTML = html;
+  $app.classList.toggle('tabs', !!$app.querySelector('.tabbar'));
   document.body.className = cls;
   if (document.querySelector('.sheet.form')) cls = 'form';
   const tc = cls === 'form' ? '#18492F' : cls === 'paper' ? '#F7EBC4' : cls === 'resting' ? '#0B2F1D' : '#0E3A24', meta = document.querySelector('meta[name="theme-color"]');
