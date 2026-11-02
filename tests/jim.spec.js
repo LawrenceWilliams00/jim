@@ -102,6 +102,12 @@ test('trains a routine, and another routine sees the same history', async ({ pag
   await tap('Skip rest');
   await tap('Log set 3');
   await expect(page.locator('.stats')).toContainText('7 sets');
+  // 62.5 kg is the heaviest bench yet; squats are new, so not a record.
+  await expect(page.locator('.stats')).toContainText('1 record');
+  await expect(page.locator('.pr')).toHaveCount(1);
+  await expect(page.locator('.pr')).toContainText('Heaviest yet · 62.5 kg × 4');
+  await expect(page.locator('.xr', { hasText: 'Bench press' }).locator('.cmp')).toHaveText('+2.5 kg');
+  await expect(page.locator('.xr', { hasText: 'Back squat' }).locator('.cmp')).toHaveText('same');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await tap('Done');
 
@@ -546,8 +552,8 @@ test('a new exercise reads cleanly before it has a weight, and the summary keeps
   await expect(page.locator('.xr').nth(1)).toContainText('Bench press');
   await tap('Done');
   await page.locator('.hist').first().click();
-  await expect(page.locator('.sheet .hrow').nth(0)).toContainText('Seated row10 @ 40 kg');
-  await expect(page.locator('.sheet .hrow').nth(1)).toContainText('4 @ 62.5 kg');
+  await expect(page.locator('.sheet .hrow').nth(0)).toContainText('Seated row10 × 40');
+  await expect(page.locator('.sheet .hrow').nth(1)).toContainText('4 × 62.5');
 });
 
 test.describe('a routine from pasted JSON', () => {
@@ -705,8 +711,8 @@ test.describe('warm-ups', () => {
     const { tap } = await open(page, { seed: withRoutine([{ kind: 'lift', exId: 'x-bench-press', sets: 4, lo: 4, hi: 6, range: true, rest: 180, warm: 4 }]) });
     await tap('Edit');
     await page.getByRole('button', { name: /^Bench press/ }).click();
-    await expect(page.locator('.morebtn')).toContainText('Barbell, 20 kg bar · 4 warm-ups · goes up by 2.5 kg');
-    await page.locator('.morebtn').click();
+    await expect(page.locator('.morebtn[data-a="slotMore"]')).toContainText('Barbell, 20 kg bar · 4 warm-ups · goes up by 2.5 kg');
+    await page.locator('.morebtn[data-a="slotMore"]').click();
     await expect(page.getByRole('button', { name: 'Barbell' })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#v-bar')).toHaveValue('20 kg');
     await tap('Barbell'); // tap again to clear it
@@ -832,7 +838,7 @@ test.describe('progress and bodyweight', () => {
     // Settings: the weighted average, and a goal.
     await tap('Settings');
     await tap('Weighted');
-    await expect(page.locator('.note2')).toContainText('the most recent the most');
+    await expect(page.locator('.note2').first()).toContainText('the most recent the most');
     await tap('Goal weight', false);
     for (const k of '75') await page.locator(`.sheet .keys button[data-k="${k}"]`).click();
     await tap('Save');
@@ -851,41 +857,86 @@ test.describe('progress and bodyweight', () => {
     await expect(page.locator('.h1')).toHaveText('Progress');
   });
 
-  test('Progress shows the week, lifts by est. 1RM, records, and each page goes back where it came from', async ({ page }) => {
+  test('Progress shows the week and lifts by est. 1RM, and each page goes back where it came from', async ({ page }) => {
     const { tap } = await open(page, { seed });
     await page.locator('.tabbar').getByRole('button', { name: 'Progress' }).click();
-    await expect(page.locator('.pcard', { hasText: 'This week' })).toContainText('1 workout');
+    const week = page.locator('.pcard', { hasText: 'This week' });
+    await expect(week).toContainText('1 workout');
+    await expect(week.locator('.chart'), 'workouts a week sit in the card').toHaveCount(1);
     // Bench: 5 × 65 kg is an est. 1RM of 75.8 kg. Pull-ups count your 80 kg: 10 reps is 106.7 kg.
     await expect(page.locator('.lrow', { hasText: 'Bench press' })).toContainText('75.8 kg');
     await expect(page.locator('.lrow', { hasText: 'Pull-up' })).toContainText('106.7 kg');
-    await expect(page.locator('.recs')).toContainText('65 kg × 5 · est. 1RM 75.8 kg');
-    await expect(page.locator('.recs')).toContainText('10 reps at bodyweight');
+    await expect(page.locator('.paperscreen'), 'no volume in kg').not.toContainText('kg lifted');
 
     await page.locator('.lrow', { hasText: 'Bench press' }).click();
     await expect(page.locator('.ptitle')).toHaveText('Bench press');
     await expect(page.locator('.hero-num')).toContainText('75.8');
+    await expect(page.locator('.chips2 button')).toHaveText(['Est. 1RM', 'Top weight']);
     await tap('Top weight');
     await expect(page.locator('.hero-num b')).toHaveText('65');
     await page.goBack();
     await expect(page.locator('.h1')).toHaveText('Progress');
-
-    // A lift opened from Records goes back to Records.
-    await page.locator('.secrow', { hasText: 'Latest records' }).getByRole('button', { name: 'All' }).click();
-    await expect(page.locator('.ptitle')).toHaveText('Records');
-    await tap('Est. 1RM');
-    await page.locator('.rec', { hasText: 'Pull-up' }).click();
-    await expect(page.locator('.ptop')).toContainText('Records');
-    await page.goBack();
-    await expect(page.locator('.ptitle')).toHaveText('Records');
-    await page.goBack();
-    await expect(page.locator('.h1')).toHaveText('Progress');
-
-    await page.locator('.pcard', { hasText: 'This week' }).click();
-    await expect(page.locator('.weeksw')).toContainText('This week');
-    await tap('Previous week');
-    await expect(page.locator('.weeksw')).toContainText('Last week');
-    await tap('Progress', false);
     await page.goBack();
     await expect(page.locator('.h1'), 'back from Progress is Today').toHaveText('Today');
+  });
+
+  test('a set in a finished workout can be fixed, and Progress follows', async ({ page }) => {
+    const { tap } = await open(page, { seed });
+    await page.locator('[data-a="openSession"]').first().click();
+    await page.getByRole('button', { name: 'Fix Bench press, 5 × 65 kg' }).first().click();
+    await page.locator('.sheet .keys button[data-k="7"]').click();
+    await page.locator('.sheet .keys button[data-k="0"]').click();
+    await tap('Reps');
+    await page.locator('.sheet .keys button[data-k="6"]').click();
+    await tap('Done');
+    await expect(page.locator('.sheet .hsets').first()).toContainText('6 × 70');
+    await tap('Done');
+    await page.locator('.tabbar').getByRole('button', { name: 'Progress' }).click();
+    await expect(page.locator('.lrow', { hasText: 'Bench press' }), '6 × 70 kg is an est. 1RM of 84 kg').toContainText('84 kg');
+    await page.reload();
+    await page.locator('.tabbar').getByRole('button', { name: 'Progress' }).click();
+    await expect(page.locator('.lrow', { hasText: 'Bench press' }), 'the fix is saved').toContainText('84 kg');
+  });
+
+  test('an exercise opens its Progress page from a workout and from the editor, and back returns there', async ({ page }) => {
+    const { tap } = await open(page, { seed });
+    await tap('Edit');
+    await page.getByRole('button', { name: /^Bench press/ }).click();
+    await page.locator('.sheet').getByRole('button', { name: /^Progress/ }).click();
+    await expect(page.locator('.ptitle')).toHaveText('Bench press');
+    await expect(page.locator('.ptop')).toContainText('Routine');
+    await page.goBack();
+    await expect(page.locator('#e-name'), 'back in the exercise editor').toHaveValue('Bench press');
+    await tap('Done'); await tap('Done');
+
+    await tap('Start');
+    await page.locator('[data-a="openEx"]').first().click();
+    await expect(page.locator('.sheet')).toContainText('Notes');
+    await page.locator('.sheet').getByRole('button', { name: /^Progress/ }).click();
+    await expect(page.locator('.ptitle')).toHaveText('Bench press');
+    await expect(page.locator('.ptop')).toContainText('Workout');
+    await page.goBack();
+    await expect(page.locator('.sheet'), 'the exercise sheet is open again').toContainText('Notes');
+    await tap('Done');
+    await expect(page.locator('#card'), 'and the workout carries on').toBeVisible();
+  });
+
+  test('waist is optional: on in Settings, logged on the Bodyweight page', async ({ page }) => {
+    const { tap } = await open(page, { seed });
+    await page.locator('.tabbar').getByRole('button', { name: 'Progress' }).click();
+    await page.locator('.pcard', { hasText: 'Bodyweight' }).click();
+    await expect(page.locator('.secrow', { hasText: 'Waist' }), 'off until you turn it on').toHaveCount(0);
+    await page.goBack(); await page.goBack();
+    await tap('Settings');
+    await page.locator('.srow', { hasText: 'Track waist' }).getByRole('button', { name: 'On' }).click();
+    await tap('Today', false);
+    await page.locator('.tabbar').getByRole('button', { name: 'Progress' }).click();
+    await page.locator('.pcard', { hasText: 'Bodyweight' }).click();
+    await tap('Log waist');
+    for (const k of '95.5') await page.locator(`.sheet .keys button[data-k="${k}"]`).click();
+    await tap('Save');
+    await expect(page.locator('.hero-num.sm')).toContainText('95.5');
+    await page.goBack();
+    await expect(page.locator('.pcard', { hasText: 'Bodyweight' })).toContainText('Waist 95.5 cm');
   });
 });

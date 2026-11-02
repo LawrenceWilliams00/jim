@@ -538,3 +538,28 @@ textarea { min-height: 96px; resize: vertical; }
 .pseg { flex: none; display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--paper-2); }
 .pseg button { height: 38px; padding: 0 14px; border-radius: 9px; font-size: 15px; font-weight: 600; color: var(--ink-2); }
 .pseg button.on { background: var(--paper); color: var(--ink); box-shadow: 0 1px 2px rgba(14, 58, 36, .15); }
+
+/* the This week card: workouts a week */
+.pc-h2 { display: block; margin-top: 14px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.pcard .chart { margin-top: 2px; }
+.facts > div:last-child:nth-child(odd) { grid-column: span 2; }
+.hero-num.sm { margin-top: 6px; }
+.hero-num.sm b { font-size: 32px; }
+.hero-num.sm small { font-size: 17px; }
+
+/* the summary: records, and each lift against last time */
+.pr .prt { min-width: 0; }
+.pr .prt b { display: block; font-size: 17px; }
+.pr .prt span { display: block; font-size: 13px; color: var(--ink-2); margin-top: 1px; }
+.xr .cmp { font-size: 15px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+.xr .cmp.up { color: var(--gold-ink); }
+
+/* fixing a finished workout */
+.hsets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.hsets button { height: 40px; padding: 0 12px; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line); font-size: 15px; font-weight: 600; color: var(--cream); }
+.ssethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.ssethead > span { min-width: 0; }
+.ssethead b { display: block; font-size: 17px; overflow-wrap: anywhere; }
+.ssethead .seg2 { flex: none; }
+.ssethead .seg2 button { min-width: 0; }
+@media (max-width: 374px) { .pcard .spark { width: 76px; } }

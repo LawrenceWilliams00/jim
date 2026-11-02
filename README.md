@@ -80,14 +80,18 @@ Two tabs along the bottom: **Today** and **Progress**.
 - **Bodyweight**: log it from the row at the top of Today, once a day (logging again changes it). Jim shows a smoothed line, the change a week (over up to 4 weeks, once there are 10 days of weigh-ins), and how long to your goal. Tap any weigh-in on the Bodyweight page to change or delete it.
 - **Lifts** are measured by estimated 1RM (weight × (1 + reps / 30), the best set each week). Lifts you do for more than 12 reps are measured by your top set instead, since the estimate isn't worth much that high. Lifts with **Bodyweight** equipment count your bodyweight that day plus anything added.
 - This week's point on a lift's line only shows once it beats last week, so a light day early in the week doesn't look like going backwards.
-- **Records**: a session that beats every earlier one for that lift: its est. 1RM, its heaviest weight, or more reps than ever at that weight or heavier. Your first session with a lift isn't a record.
-- **Weeks**: workouts, volume, working sets and time, against your plan (one workout per routine in it a week).
-- **Settings** (from the bottom of Today): the bodyweight average (**7-day**, or **Weighted**, where recent weigh-ins count most), your goal weight, sound, and backup.
+- **This week**: workouts against your plan (one per routine in it), working sets and time, and workouts a week over the last 8 weeks.
+- **Records** show on the summary when you finish: a session that beats every earlier one for that lift on its est. 1RM, its heaviest weight, or more reps than ever at that weight or heavier. Your first session with a lift isn't a record. Records are also the gold dots on a lift's chart.
+- The summary shows each lift against last time: the weight if it changed, otherwise the reps.
+- **Fixing a past workout**: tap it under Recent on Today, then tap a set to change its weight or reps.
+- **An exercise's Progress page** opens from its sheet during a workout or in the routine editor, and back returns you there.
+- **Waist** (optional, turn on in Settings): a weekly measurement on the Bodyweight page, with its change over about 4 weeks.
+- **Settings** (from the bottom of Today): the bodyweight average (**7-day**, or **Weighted**, where recent weigh-ins count most), waist tracking, your goal weight, sound, and backup.
 
 ## Your data
 
 - Everything is stored in Chrome's storage for this site on the phone, under the keys `jim.v3` and `jim.v3.sessions`. Uninstalling the app or clearing Chrome's data for the site deletes it.
-- To back up, go to **Today → Backup → Download backup**, which saves a JSON file with your weigh-ins too. **Restore from a file** merges a backup in: anything missing is added, and where both copies have an item the newer one wins.
+- To back up, go to **Today → Backup → Download backup**, which saves a JSON file with your weigh-ins and waist measurements too. **Restore from a file** merges a backup in: anything missing is added, and where both copies have an item the newer one wins.
 - There's no sync between devices. Use a backup file to move your data across.
 
 ## Updating
