@@ -660,3 +660,129 @@ test('a long name on a small phone still leaves Skip rest on screen; a 3-part su
   await tap('Finish'); await tap('Finish workout');
   await expect(page.locator('.xr').first()).toContainText('6 @ 60 · 6 @ 55 kg');
 });
+
+test.describe('warm-ups', () => {
+  const withRoutine = (blocks, extraEx = {}) => { const s = JSON.parse(backup); Object.assign(s.exercises, extraEx); s.routines = [{ id: 'rW', name: 'W', order: 0, updatedAt: 1, blocks }]; return JSON.stringify(s); };
+  const rows = page => page.locator('#scroll .row').allInnerTexts();
+
+  test('a barbell lift starts at the empty bar and climbs to a last warm-up set by the rep range', async ({ page }) => {
+    // Bench press history: 4 × 6 at 60 kg, so today is 62.5 kg for 4–6. Bench is guessed as a barbell.
+    const { tap } = await open(page, { seed: withRoutine([{ kind: 'lift', exId: 'x-bench-press', sets: 4, lo: 4, hi: 6, range: true, rest: 180, warm: 4 }]) });
+    await tap('Start');
+    await expect(page.locator('#card')).toContainText('Warm-up 1');
+    await expect(page.locator('#card .fval').nth(1)).toHaveText('20');
+    await expect(page.locator('#card')).toContainText('empty bar');
+    const r = (await rows(page)).map(t => t.replace(/\s+/g, ' '));
+    expect(r.slice(0, 3)).toEqual(['Warm-up 2 6 × 30 kg', 'Warm-up 3 3 × 42.5 kg', 'Warm-up 4 2 × 52.5 kg']);
+  });
+
+  test('light lifts get fewer warm-ups, never one at the working weight', async ({ page }) => {
+    const { tap } = await open(page, { seed: withRoutine([{ kind: 'lift', exId: 'x-curl', sets: 3, lo: 10, hi: 12, range: true, rest: 60, warm: 2 }], { 'x-curl': { id: 'x-curl', name: 'Curl', step: 2.5, notes: '', updatedAt: 1 } }) });
+    await tap('Start');
+    await expect(page.locator('#card')).toContainText('set working weight');
+    await tap('Set a weight'); await tap('5'); await tap('Done');
+    await expect(page.locator('#card .fval').nth(1)).toHaveText('2.5');
+    await expect(page.locator('#scroll .row.warm')).toHaveCount(0); // the second warm-up would have been 5 kg, so it's gone
+    await expect(page.locator('#scroll')).toContainText('Set 1');
+  });
+
+  test('Manual warm-ups ask for their own weight; there are none inside a superset', async ({ page }) => {
+    const { tap } = await open(page, { seed: withRoutine([
+      { kind: 'lift', exId: 'x-back-squat', sets: 1, lo: 5, hi: 8, range: true, rest: 0, warm: 2, warmMode: 'manual' },
+      { kind: 'ss', rest: 60, parts: [{ exId: 'x-bench-press', sets: 2, lo: 4, hi: 6, range: true, warm: 3 }, { exId: 'x-back-squat', sets: 2, lo: 5, hi: 8, range: true, warm: 2 }] },
+    ]) });
+    await tap('Start');
+    await expect(page.locator('#card')).toContainText('Warm-up 1');
+    await expect(page.locator('#card')).toContainText('set a weight');
+    await tap('Set a weight');
+    await expect(page.locator('.sheet')).toContainText('Weight, warm-up 1');
+    await tap('4'); await tap('0'); await tap('Done');
+    await tap('Log warm-up 1'); await tap('Skip'); await tap('Log set 1');
+    await expect(page.locator('.sshead')).toContainText('Round 1 of 2');
+  });
+
+  test('equipment is optional, guessed for obvious names, and Barbell adds the bar weight', async ({ page }) => {
+    const { tap } = await open(page, { seed: withRoutine([{ kind: 'lift', exId: 'x-bench-press', sets: 4, lo: 4, hi: 6, range: true, rest: 180, warm: 4 }]) });
+    await tap('Edit');
+    await page.getByRole('button', { name: /^Bench press/ }).click();
+    await expect(page.locator('.morebtn')).toContainText('Barbell, 20 kg bar · 4 warm-ups · goes up by 2.5 kg');
+    await page.locator('.morebtn').click();
+    await expect(page.getByRole('button', { name: 'Barbell' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#v-bar')).toHaveValue('20 kg');
+    await tap('Barbell'); // tap again to clear it
+    await expect(page.locator('#v-bar')).toHaveCount(0);
+    await tap('Manual');
+    await tap('Done');
+    await expect(page.locator('.blk').first()).toContainText('4 warm-ups');
+  });
+});
+
+test.describe('plans', () => {
+  const seedWith = extra => { const s = JSON.parse(backup); s.routines.push(...extra); return JSON.stringify(s); };
+  const dayB = { id: 'rB', name: 'Day B', order: 1, updatedAt: 1, blocks: [{ kind: 'lift', exId: 'x-back-squat', sets: 2, lo: 5, hi: 8, range: true, rest: 0, warm: 0 }] };
+  const mob = { id: 'rM', name: 'Mobility', order: 2, updatedAt: 1, blocks: [{ kind: 'check', name: 'Stretch', items: [{ text: 'Hips', detail: '', ticks: 1, timer: 0 }] }] };
+
+  test('a plan gathers routines, and the plan you use runs Today', async ({ page }) => {
+    const { tap } = await open(page, { seed: seedWith([dayB, mob]) });
+    await tap('New plan');
+    await expect(page.locator('#p-name')).toBeFocused();
+    await page.keyboard.type('A/B');
+    await expect(page.locator('.planstate'), 'your first plan is the one you use').toContainText('You’re using this plan');
+    await tap('Add'); await tap('Day A', false);
+    await tap('Add'); await tap('Day B', false);
+    await expect(page.locator('.blk b')).toHaveText(['Day A', 'Day B']);
+    await tap('Done');
+    // Day A was done last, so Day B is next within the plan; Mobility sits outside it.
+    await expect(page.locator('.eyebrow2')).toHaveText('Next up · A/B');
+    await expect(page.locator('.hero4')).toContainText('Day B');
+    await expect(page.locator('.sechead').first()).toContainText('In this plan');
+    await expect(page.locator('.others').first()).toContainText('Day A');
+    await expect(page.locator('.paperscreen')).toContainText('Not in a plan');
+    await expect(page.locator('.others').last()).toContainText('Mobility');
+
+    // A new routine from Today joins the plan in use.
+    await tap('New routine'); await page.keyboard.type('Day C'); await tap('Done');
+    await expect(page.locator('.hero4')).toContainText('Day C'); // a new routine is the one picked
+    await tap('Edit plan');
+    await expect(page.locator('.blk b')).toHaveText(['Day A', 'Day B', 'Day C']);
+    await tap('Done');
+
+    // From a routine's ••• menu it can leave the plan.
+    await tap('Edit plan'); await tap('Day C', false);
+    await tap('Routine options'); await tap('Plan', false); await tap('Not in a plan');
+    await tap('Done');
+    await expect(page.locator('#p-name')).toHaveValue('A/B'); // back to the plan it was opened from
+    await expect(page.locator('.blk b')).toHaveText(['Day A', 'Day B']);
+
+    // Deleting a plan keeps its routines, and can be undone.
+    await tap('Plan options'); await tap('Delete plan', false);
+    await expect(page.locator('.toast')).toContainText('Its routines are kept');
+    await expect(page.locator('.paperscreen')).toContainText('Day A');
+    await tap('Undo');
+    await expect(page.locator('.eyebrow2')).toHaveText('Next up · A/B');
+  });
+
+  test('a whole multi-day plan can be pasted, into a new routine or into a plan', async ({ page }) => {
+    const { tap } = await open(page, { seed: backup });
+    await tap('New routine'); await tap('Paste JSON');
+    await page.locator('#paste-json').fill(JSON.stringify({ plan: 'Push Pull Legs', routines: [
+      { name: 'Push', items: [{ exercise: 'Bench press', sets: 4, reps: '4-6', rest: 180, warmups: 3 }] },
+      { name: 'Pull', items: [{ exercise: 'Lat pulldown', equipment: 'machine', sets: 3, reps: '8-12' }] },
+      { name: 'Legs', items: [{ exercise: 'Back squat', sets: 3, reps: '5-8', warmups: 4 }] },
+    ] }));
+    await expect(page.locator('#paste-status')).toContainText('Plan “Push Pull Legs”, 3 routines: Push, Pull, Legs');
+    await tap('Done');
+    await expect(page.locator('#p-name')).toHaveValue('Push Pull Legs');
+    await expect(page.locator('.blk b')).toHaveText(['Push', 'Pull', 'Legs']);
+    await tap('Done');
+    await expect(page.locator('.eyebrow2')).toHaveText('Next up · Push Pull Legs');
+    await expect(page.locator('.hero4')).toContainText('Push');
+    await expect(page.locator('.paperscreen')).not.toContainText('Untitled routine'); // the blank routine it came from is gone
+
+    // Into a plan: Add → Paste JSON takes one routine or several.
+    await tap('Edit plan'); await tap('Add'); await tap('Paste JSON');
+    await page.locator('#paste-json').fill('[{"name": "Arms", "items": ["Curl"]}, {"name": "Core", "items": [{"exercise": "Plank", "sets": 3, "reps": 1}]}]');
+    await tap('Done');
+    await expect(page.locator('.blk b')).toHaveText(['Push', 'Pull', 'Legs', 'Arms', 'Core']);
+  });
+});

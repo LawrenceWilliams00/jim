@@ -43,7 +43,7 @@ const ICON = {
 };
 
 // ---------- state ----------
-let S = { exercises: {}, routines: [], sessions: [], settings: { sound: true, rangeMode: true }, cur: null };
+let S = { exercises: {}, routines: [], plans: [], sessions: [], settings: { sound: true, rangeMode: true }, cur: null };
 const UI = { screen: 'today', sheet: null, toast: null, sel: null, editId: null, confirm: null, scrollToCard: false, lastLog: null, summary: null };
 (function loadLocal() {
   try {
@@ -52,6 +52,7 @@ const UI = { screen: 'today', sheet: null, toast: null, sel: null, editId: null,
       const o = JSON.parse(raw);
       S = Object.assign(S, o);
       S.exercises = o.exercises || {};
+      S.plans = Array.isArray(o.plans) ? o.plans : [];
       S.settings = Object.assign({ sound: true, rangeMode: true }, o.settings || {});
     }
     const rs = localStorage.getItem(STORE_SESSIONS);
@@ -68,7 +69,8 @@ function ensureEx(name, step) {
   const nm = String(name || '').trim() || 'Untitled exercise';
   const found = findByName(nm); if (found) return found;
   let id = 'x-' + slug(nm); if (S.exercises[id]) id = id + '-' + Math.random().toString(36).slice(2, 6);
-  const ex = { id, name: nm, step: step || 2.5, notes: '', updatedAt: 0 };
+  const ex = { id, name: nm, step: step || 2.5, notes: '', updatedAt: 0 }, eq = guessEquip(nm);
+  if (eq) { ex.equip = eq; if (eq === 'barbell') ex.bar = 20; }
   S.exercises[id] = ex; return ex;
 }
 // A routine with nothing in it and no name of its own was never really made (New routine, then straight back out).
@@ -83,6 +85,7 @@ function migrate() {
   if (S.notes) { Object.entries(S.notes).forEach(([k, v]) => { const ex = findByName(k); if (ex && v && !ex.notes) { ex.notes = v; dirtyX.add(ex.id); } }); delete S.notes; }
   let settings = false; if (S.settings.rest) { delete S.settings.rest; settings = true; }
   ['ui', 'look', 'opt'].forEach(k => { if (S.settings[k]) { delete S.settings[k]; settings = true; } }); // left over from trying layouts
+  if (!S.settings.equipGuessed) { Object.values(S.exercises).forEach(x => { if (x.equip) return; const g = guessEquip(x.name); if (g) { x.equip = g; if (g === 'barbell' && x.bar == null) x.bar = 20; dirtyX.add(x.id); } }); S.settings.equipGuessed = 1; settings = true; }
   if (S.routines.some(blankRoutine)) { S.routines = S.routines.filter(r => !blankRoutine(r)); settings = true; } // older versions kept these
   Object.keys(S.exercises).forEach(id => { if (!before.has(id)) dirtyX.add(id); });
   return { routines: [...dirtyR], exercises: [...dirtyX], sessions: [...dirtyS], settings };
@@ -92,11 +95,18 @@ if (S.cur && now() - (S.cur.updatedAt || 0) < 6 * 3600 * 1000) UI.screen = 'trai
 
 const routinesSorted = () => S.routines.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
 const routineById = id => S.routines.find(r => r.id === id);
+// Plans are folders of routines. The one you're using (settings.plan) runs Today: Next up rotates through its routines.
+const plansSorted = () => (S.plans || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+const planById = id => (id && (S.plans || []).find(p => p.id === id)) || null;
+const activePlan = () => planById(S.settings.plan);
+const planOf = r => (r && r.planId && planById(r.planId) ? r.planId : null);
+const routinesIn = pid => routinesSorted().filter(r => planOf(r) === (pid || null));
+const nextOrder = list => Math.max(0, ...list.map(x => x.order || 0)) + 1;
+function savePlan(pl) { pl.updatedAt = now(); saveLocal(); }
 function suggestedRoutine() {
-  const rs = routinesSorted(); if (!rs.length) return null;
-  const last = sortedSessions()[0]; if (!last) return rs[0];
-  const i = rs.findIndex(r => r.id === last.routineId);
-  return i < 0 ? rs[0] : rs[(i + 1) % rs.length];
+  const ap = activePlan(), inPlan = ap ? routinesIn(ap.id) : [], rs = inPlan.length ? inPlan : routinesSorted(); if (!rs.length) return null;
+  const last = sortedSessions().find(s => rs.some(r => r.id === s.routineId)); if (!last) return rs[0];
+  return rs[(rs.findIndex(r => r.id === last.routineId) + 1) % rs.length];
 }
 function slotsOf(r) { const out = []; (r.blocks || []).forEach(b => { if (b.kind === 'lift') out.push(b); else if (b.kind === 'ss') (b.parts || []).forEach(p => out.push(p)); }); return out; }
 
@@ -124,8 +134,49 @@ const e1 = (reps, kg) => (kg || 0) * (1 + reps / 30);
 
 // ---------- building a session ----------
 function workKg(b) { const w = b.sets.find(y => y.kind === 'work'); return w ? w.kg : null; }
-function warmKg(b, frac) { const top = workKg(b); if (top == null) return null; if (top === 0 || frac === 'easy') return 0; return r2(Math.max(b.step, Math.round((top * frac) / b.step) * b.step)); }
-function refreshWarm(b) { if (b.kind === 'lift') b.sets.forEach(x => { if (x.kind === 'warm' && isOpen(x) && !x.touched) { x.kg = warmKg(b, x.frac); if (x.kg === 0 && x.frac !== 'easy') { x.frac = 'easy'; x.reps = Math.max(3, b.lo - 2); } } }); }
+// Warm-ups, worked out from the working weight W (the first working set), not a 1-rep max:
+// barbell lifts start with the empty bar; the rest climb evenly to a last warm-up that's closer for heavier, low-rep work
+// (85% of W for up to 6 reps, 80% to 8, 75% to 12, 70% above); reps fall as the weight climbs; a warm-up never repeats
+// a weight or reaches W, so light lifts get fewer. Bodyweight lifts get easy sets.
+function warmPlan(W, n, lo, step, bar) {
+  if (!n || W == null) return [];
+  if (W === 0) return Array.from({ length: n }, () => ({ kg: 0, reps: Math.max(3, lo - 2), frac: 'easy' }));
+  const top = W * (lo <= 6 ? 0.85 : lo <= 8 ? 0.8 : lo <= 12 ? 0.75 : 0.7);
+  const start = bar || W * (n === 1 ? 0.6 : n === 2 ? 0.5 : 0.4);
+  const aims = n === 1 ? [bar ? Math.max(bar, Math.min(W * 0.6, top)) : Math.min(start, top)] : Array.from({ length: n }, (_, k) => start + (top - start) * k / (n - 1));
+  const gap = Math.max(step, W * 0.08), out = [];
+  aims.forEach(v => {
+    const kg = bar && v === bar ? bar : r2(Math.round(v / step) * step);
+    if (kg <= 0 || kg >= W || (out.length && kg < out[out.length - 1].kg + gap)) return;
+    const f = kg / W;
+    out.push({ kg, reps: bar && kg === bar ? 10 : f <= 0.5 ? 6 : f <= 0.65 ? 4 : f <= 0.8 ? 3 : 2, frac: bar && kg === bar ? 'bar' : f });
+  });
+  return out;
+}
+// Auto warm-ups follow the working weight. While none of the block is done they're rebuilt outright (a light weight
+// can mean fewer); after that only the ones still to do are updated in place.
+function refreshWarm(b) {
+  if (b.kind !== 'lift' || b.warmAuto === false) return;
+  const warms = b.sets.filter(x => x.kind === 'warm'), n = b.warmN != null ? b.warmN : warms.length, W = workKg(b);
+  if (!n || W == null) return;
+  const plan = warmPlan(W, n, b.lo, b.step, b.bar || 0);
+  if (b.sets.every(x => isOpen(x) && !(x.kind === 'warm' && x.touched))) { b.sets = plan.map(p => ({ kind: 'warm', frac: p.frac, reps: p.reps, kg: p.kg, done: false, skipped: false, touched: false })).concat(b.sets.filter(x => x.kind !== 'warm')); return; }
+  warms.forEach((x, k) => { if (isOpen(x) && !x.touched && plan[k]) Object.assign(x, plan[k]); });
+}
+// Last time's warm-ups for an exercise, for warm-ups you set yourself.
+function lastWarmFor(exId) { for (const s of sortedSessions()) for (const b of liftsOf(s)) if (b.exId === exId) { const d = b.sets.filter(x => x.kind === 'warm' && x.done); if (d.length) return d; } return []; }
+// Equipment, guessed from an exercise's name when it's clear; it's a setting you can change or clear.
+const EQUIP = { barbell: 'Barbell', dumbbell: 'Dumbbells', machine: 'Machine', bodyweight: 'Bodyweight' };
+function guessEquip(name) {
+  const n = norm(name);
+  if (/\b(split squats?|lunges?|step-?ups?|goblet)\b/.test(n)) return /\b(barbell|bb)\b/.test(n) ? 'barbell' : /\b(db|dumbbells?|goblet)\b/.test(n) ? 'dumbbell' : undefined;
+  if (/\b(db|dumbbells?|kettlebells?|kb)\b/.test(n)) return 'dumbbell';
+  if (/\b(barbell|bb)\b/.test(n)) return 'barbell';
+  if (/\b(machine|cable|smith|pulldowns?|pushdowns?|leg press|leg extensions?|leg curls?|hack squats?|pec deck|abductions?|adductions?|chest press|seated rows?)\b/.test(n)) return 'machine';
+  if (/\b(pull-?ups?|chin-?ups?|push-?ups?|dips?|glute ham raises?|ghr|nordic curls?|inverted rows?|hanging leg raises?|planks?|sit-?ups?)\b/.test(n)) return 'bodyweight';
+  if (/\b(bench press|back squats?|front squats?|squats?|deadlifts?|rdls?|overhead press|ohp|military press|bent[- ]over rows?|pendlay rows?|hip thrusts?|good mornings?)\b/.test(n)) return 'barbell';
+  return undefined;
+}
 function liftBlock(slot, ssRest, src) {
   const ex = exById(slot.exId) || { id: slot.exId, name: 'Untitled exercise', step: 2.5 };
   const step = ex.step || 2.5, lo = slot.lo || 8, hi = slot.range ? Math.max(lo, slot.hi || lo) : lo;
@@ -134,8 +185,12 @@ function liftBlock(slot, ssRest, src) {
   let kg = null, reps = [];
   if (last) { kg = last.same && last.allTop ? r2(last.kg + step) : last.kg; reps = last.same && !last.allTop ? last.sets.map(x => x.reps) : []; }
   const b = { kind: 'lift', exId: ex.id, key: ex.id, name: ex.name, step, lo, hi, rest: ssRest != null ? ssRest : (slot.rest != null ? slot.rest : 90), src, sets: [] };
-  const w = clamp(slot.warm || 0, 0, 4);
-  (w ? RAMPS[w] : []).forEach(([frac, r]) => b.sets.push({ kind: 'warm', frac, reps: r, kg: null, done: false, skipped: false, touched: false }));
+  // Equipment: barbell warm-ups start at the bar; a bodyweight lift starts at bodyweight rather than asking for a weight.
+  if (kg == null && ex.equip === 'bodyweight') kg = 0;
+  // No warm-ups inside a superset: its rounds pair sets up by position.
+  const w = ssRest != null ? 0 : clamp(slot.warm || 0, 0, 4), auto = slot.warmMode !== 'manual', was = auto ? [] : lastWarmFor(ex.id);
+  Object.assign(b, { warmN: w, warmAuto: auto, bar: ex.equip === 'barbell' ? (ex.bar != null ? ex.bar : 20) : 0, equip: ex.equip || null });
+  for (let i = 0; i < w; i++) b.sets.push({ kind: 'warm', frac: auto ? null : 'manual', reps: was[i] ? was[i].reps : RAMPS[w][i][1], kg: was[i] ? was[i].kg : null, done: false, skipped: false, touched: false });
   for (let i = 0; i < n; i++) b.sets.push({ kind: 'work', reps: reps[i] != null ? reps[i] : (reps.length ? reps[reps.length - 1] : lo), kg, done: false, skipped: false, touched: false, type: 0 });
   refreshWarm(b);
   return b;
@@ -218,7 +273,7 @@ function deleteSession(id) { S.sessions = S.sessions.filter(s => s.id !== id); s
 // ---------- backup ----------
 const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 function backupFile() {
-  const data = { app: 'jim', version: 3, exportedAt: now(), exercises: S.exercises, routines: S.routines, sessions: S.sessions, settings: S.settings };
+  const data = { app: 'jim', version: 3, exportedAt: now(), exercises: S.exercises, routines: S.routines, plans: S.plans, sessions: S.sessions, settings: S.settings };
   return new File([JSON.stringify(data)], 'jim-backup-' + ymd(new Date()) + '.json', { type: 'application/json' });
 }
 const canShareFile = () => { try { return !!(navigator.canShare && navigator.canShare({ files: [backupFile()] })); } catch (e) { return false; } };
@@ -230,11 +285,13 @@ function restoreFrom(o) {
   const merge = (local, incoming) => { const by = new Map(local.map(x => [x.id, x])); let added = 0; (incoming || []).forEach(x => { if (!x || !x.id) return; const l = by.get(x.id); if (!l) added++; if (!l || stamp(x) > stamp(l)) by.set(x.id, x); }); return [[...by.values()], added]; };
   const [xs] = merge(Object.values(S.exercises), Object.values(o.exercises || {}));
   const [rs, nr] = merge(S.routines, o.routines);
+  const [ps, np] = merge(S.plans || [], o.plans); S.plans = ps;
+  if (!activePlan() && o.settings && planById(o.settings.plan)) S.settings.plan = o.settings.plan;
   const [ss, ns] = merge(S.sessions, o.sessions);
   S.exercises = Object.fromEntries(xs.map(x => [x.id, x])); S.routines = rs; S.sessions = ss;
   if (o.notes) S.notes = o.notes;
   migrate(); saveLocal(); saveSessionsLocal();
-  return { routines: nr, sessions: ns };
+  return { plans: np, routines: nr, sessions: ns };
 }
 
 // ---------- sound + screen ----------
@@ -257,7 +314,7 @@ function toast(text, act) {
 }
 function dropToast() { clearTimeout(toast.t); UI.toast = null; const el = document.querySelector('.toast'); if (el) el.remove(); }
 function edit(fn) { const c = S.cur, t = target(c); if (!t) return; const b = liftAt(c, t), x = b.sets[t.i]; fn(x, b); x.touched = true; refreshWarm(b); touchCur(); render(); }
-function needsWork() { const c = S.cur, t = target(c); if (!t || c.blocks[t.bi].kind === 'check') return false; const b = liftAt(c, t), x = b.sets[t.i]; return x.kind === 'warm' && x.kg == null; }
+function needsWork() { const c = S.cur, t = target(c); if (!t || c.blocks[t.bi].kind === 'check') return false; const b = liftAt(c, t), x = b.sets[t.i]; return x.kind === 'warm' && x.kg == null && b.warmAuto !== false; }
 function logSet() {
   const c = S.cur; if (!c) return;
   if (c.fix) { c.fix = null; touchCur(); render(); return; }
@@ -327,7 +384,7 @@ function openSheet(sh) { UI.sheet = sh; UI.confirm = null; render(); }
 function sheetBlock() { const r = curRoutine(), sh = UI.sheet; return r && sh && r.blocks[sh.bi]; }
 function sheetSlot() { const bl = sheetBlock(), sh = UI.sheet; if (!bl) return null; return sh.p != null ? (bl.parts || [])[sh.p] : bl; }
 function slotDefaults(exId) {
-  for (const r of S.routines) for (const s of slotsOf(r)) if (s.exId === exId) return { sets: s.sets, lo: s.lo, hi: s.hi, range: !!s.range, rest: s.rest != null ? s.rest : 90, warm: s.warm || 0 };
+  for (const r of S.routines) for (const s of slotsOf(r)) if (s.exId === exId) return { sets: s.sets, lo: s.lo, hi: s.hi, range: !!s.range, rest: s.rest != null ? s.rest : 90, warm: s.warm || 0, warmMode: s.warmMode };
   const rm = S.settings.rangeMode !== false;
   return { sets: 3, lo: rm ? 8 : 10, hi: rm ? 12 : 10, range: rm, rest: 90, warm: 0 };
 }
@@ -355,6 +412,14 @@ function restoreSnap(sh) { const r = curRoutine(); if (!r || !sh.snap) return; c
 // ---------- a routine from pasted JSON ----------
 // Forgiving on purpose: it'll usually come from an AI chat or a notes app, so code fences, chatter around the JSON,
 // curly quotes and trailing commas are all fine, and the field names can vary ("reps": "6-8", "rest": "2 min", …).
+const PASTE_PLAN_EXAMPLE = JSON.stringify({
+  plan: 'Push Pull Legs',
+  routines: [
+    { name: 'Push', items: [{ exercise: 'Bench press', equipment: 'barbell', sets: 4, reps: '4-6', rest: 180, warmups: 3 }, { exercise: 'Incline dumbbell press', equipment: 'dumbbell', sets: 3, reps: '8-12', rest: 120 }, { superset: [{ exercise: 'Lateral raise', sets: 3, reps: '12-15' }, { exercise: 'Triceps pushdown', sets: 3, reps: '10-12' }], rest: 90 }] },
+    { name: 'Pull', items: [{ exercise: 'Deadlift', equipment: 'barbell', sets: 3, reps: '3-5', rest: 180, warmups: 3 }, { exercise: 'Lat pulldown', equipment: 'machine', sets: 3, reps: '8-12', rest: 120 }, { exercise: 'Curl', sets: 3, reps: '10-12', rest: 60 }] },
+    { name: 'Legs', items: [{ checklist: 'Warm-up', items: [{ text: 'Bike', timer: 5 }] }, { exercise: 'Back squat', equipment: 'barbell', sets: 3, reps: '5-8', rest: 180, warmups: 4 }, { exercise: 'Leg curl', equipment: 'machine', sets: 3, reps: '10-12', rest: 90 }] },
+  ],
+}, null, 2);
 const PASTE_EXAMPLE = JSON.stringify({
   name: 'Push day',
   items: [
@@ -394,6 +459,11 @@ function liftFrom(x, label) {
   if (rest != null) p.rest = rest;
   const warm = numOf(firstOf(x, ['warmups', 'warm_ups', 'warmUps', 'warmup_sets', 'warmupSets', 'warm', 'warmup']));
   if (warm != null) p.warm = clamp(Math.round(warm), 0, 4);
+  const eq = String(firstOf(x, ['equipment', 'equip']) || '').toLowerCase();
+  p.equip = /bar ?bell|^bb$|^bar$/.test(eq) ? 'barbell' : /dumb ?bell|^db$|kettle/.test(eq) ? 'dumbbell' : /machine|cable|smith/.test(eq) ? 'machine' : /body|^bw$/.test(eq) ? 'bodyweight' : undefined;
+  const bar = numOf(firstOf(x, ['bar', 'bar_weight', 'barWeight'])); if (bar != null) { p.bar = clamp(bar, 0, 50); p.equip = p.equip || 'barbell'; }
+  const wm = String(firstOf(x, ['warmup_mode', 'warmupMode', 'warmup_weights']) || '').toLowerCase();
+  if (wm === 'manual' || x.manual_warmups === true || x.auto_warmups === false) p.warmMode = 'manual';
   const notes = firstOf(x, ['notes', 'note', 'cues', 'cue']); if (notes != null) p.notes = String(notes);
   const step = numOf(firstOf(x, ['step', 'increment', 'kg_step'])); if (step) p.step = clamp(step, 0.25, 50);
   return p;
@@ -406,20 +476,32 @@ function checkItemFrom(x) {
   const detail = firstOf(x, ['detail', 'details', 'note', 'notes', 'reps']);
   return { text, detail: detail == null ? '' : String(detail), ticks: timer ? 1 : clamp(Math.round(numOf(firstOf(x, ['ticks', 'rounds', 'sets'])) || 1), 1, 6), timer: timer || 0 };
 }
-// Text → { name, blocks } with exercises still as names. Throws an Error with a message fit to show.
-function readRoutineJson(text) {
+// Text → { kind: 'routine', name, blocks } or { kind: 'plan', name, routines: [{ name, blocks }] }, exercises still as
+// names. A plan is several days: { "plan": "…", "routines": [ { "name": "…", "items": [ … ] }, … ] }, or just a list of them.
+// Throws an Error with a message fit to show.
+const routineLike = x => !!x && typeof x === 'object' && !Array.isArray(x) && ['items', 'blocks', 'exercises', 'workout'].some(k => Array.isArray(x[k]));
+function readPasteJson(text) {
   let s = String(text || '').trim();
-  if (!s) throw new Error('Paste a routine first.');
+  if (!s) throw new Error('Paste a routine or a plan first.');
   const a = s.search(/[[{]/), z = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
   if (a < 0 || z < a) throw new Error('That isn’t JSON. It should start with { or [.');
   s = s.slice(a, z + 1).replace(/[“”]/g, '"').replace(/[‘’]/g, '\'').replace(/,(\s*[}\]])/g, '$1');
   let o; try { o = JSON.parse(s); } catch (e) { throw new Error('That isn’t valid JSON: ' + e.message.replace(/^JSON\.parse: /, '')); }
-  if (o && !Array.isArray(o) && Array.isArray(o.routines)) { if (o.routines.length !== 1) throw new Error('That has ' + o.routines.length + ' routines. Paste one at a time.'); o = o.routines[0]; }
-  if (o && o.routine && typeof o.routine === 'object') o = o.routine;
+  if (o && !Array.isArray(o) && o.plan && typeof o.plan === 'object' && !Array.isArray(o.plan)) o = o.plan;
+  if (o && !Array.isArray(o) && o.routine && typeof o.routine === 'object') o = o.routine;
+  const days = Array.isArray(o) ? (o.length && o.every(routineLike) ? o : null) : o && [o.routines, o.days, o.workouts].find(Array.isArray);
+  if (days) {
+    if (!days.length) throw new Error('That plan has no routines in it.');
+    const routines = days.map((d, k) => { if (!routineLike(d)) throw new Error('Routine ' + (k + 1) + ' has no list of exercises ("items").'); const nm = String(firstOf(d, ['name', 'title', 'day']) || 'Day ' + (k + 1)).trim(); return Object.assign(readRoutineObj(d, nm + ', item '), { name: nm }); });
+    return { kind: 'plan', name: Array.isArray(o) ? '' : String((typeof o.plan === 'string' && o.plan) || firstOf(o, ['name', 'title', 'program', 'programme']) || '').trim(), routines };
+  }
+  return Object.assign({ kind: 'routine' }, readRoutineObj(o, 'Item '));
+}
+function readRoutineObj(o, label0) {
   const list = Array.isArray(o) ? o : o && (o.items || o.blocks || o.exercises || o.workout);
   if (!Array.isArray(list) || !list.length) throw new Error('Couldn’t find the exercises. Put them in a list called "items".');
   const blocks = list.map((x, k) => {
-    const label = 'Item ' + (k + 1), kind = x && typeof x === 'object' ? String(x.kind || x.type || '').toLowerCase() : '';
+    const label = label0 + (k + 1), kind = x && typeof x === 'object' ? String(x.kind || x.type || '').toLowerCase() : '';
     if (x && typeof x === 'object' && (Array.isArray(x.superset) || kind === 'ss' || kind === 'superset')) {
       const parts = (Array.isArray(x.superset) ? x.superset : x.parts || x.exercises || x.items || []).map((p, j) => liftFrom(p, label + ', exercise ' + (j + 1)));
       if (!parts.length) throw new Error(label + ' is a superset with no exercises.');
@@ -439,22 +521,29 @@ function readRoutineJson(text) {
   const name = Array.isArray(o) ? '' : String(firstOf(o, ['name', 'title', 'routine_name', 'routineName']) || '').trim();
   return { name, blocks };
 }
-const planName = b => (b.kind === 'check' ? b.name : b.kind === 'ss' ? b.parts.map(p => p.name).join(' + ') : b.name);
+const itemName = b => (b.kind === 'check' ? b.name : b.kind === 'ss' ? b.parts.map(p => p.name).join(' + ') : b.name);
 // The plan as routine blocks: exercises found by name (any case), new ones added, the rest from the usual defaults.
 function blocksFromPlan(plan) {
   const slot = (p, inSs) => {
-    const ex = ensureEx(p.name, p.step); if (p.notes && !ex.notes) ex.notes = p.notes; saveEx(ex);
+    const ex = ensureEx(p.name, p.step); if (p.notes && !ex.notes) ex.notes = p.notes;
+    if (p.equip) { ex.equip = p.equip; if (p.equip === 'barbell') ex.bar = p.bar != null ? p.bar : ex.bar != null ? ex.bar : 20; }
+    saveEx(ex);
     const o = Object.assign({ exId: ex.id }, slotDefaults(ex.id));
-    ['sets', 'lo', 'hi', 'range', 'rest', 'warm'].forEach(k => { if (p[k] != null) o[k] = p[k]; });
+    ['sets', 'lo', 'hi', 'range', 'rest', 'warm', 'warmMode'].forEach(k => { if (p[k] != null) o[k] = p[k]; });
     if (o.hi < o.lo) o.hi = o.lo;
-    if (inSs) delete o.rest;
+    if (inSs) { delete o.rest; o.warm = 0; delete o.warmMode; }
     return o;
   };
   return plan.blocks.map(b => b.kind === 'check' ? { kind: 'check', name: b.name, items: b.items } : b.kind === 'ss' ? { kind: 'ss', rest: b.rest, parts: b.parts.map(p => slot(p, true)) } : Object.assign({ kind: 'lift' }, slot(b, false)));
 }
 function pasteStatusHtml(sh) {
   if (!String(sh.text || '').trim()) return '';
-  try { const p = readRoutineJson(sh.text); return '<span class="ok">' + ICON.check + esc(plural(p.blocks.length, 'item') + ': ' + p.blocks.map(planName).join(', ')) + '</span>'; }
+  try {
+    const p = readPasteJson(sh.text);
+    const txt = p.kind === 'plan' && (p.routines.length > 1 || sh.plan) ? (p.name ? 'Plan “' + p.name + '”, ' : 'A plan with ') + plural(p.routines.length, 'routine') + ': ' + p.routines.map(r => r.name).join(', ')
+      : (b => plural(b.length, 'item') + ': ' + b.map(itemName).join(', '))(p.kind === 'plan' ? p.routines[0].blocks : p.blocks);
+    return '<span class="ok">' + ICON.check + esc(txt) + '</span>';
+  }
   catch (e) { return '<span class="' + (sh.tried ? 'bad' : '') + '">' + esc(e.message) + '</span>'; }
 }
 
@@ -469,18 +558,22 @@ const A = {
   delSession: d => { if (UI.confirm !== 'del') { UI.confirm = 'del'; render(); return; } deleteSession(d.id); UI.sheet = null; UI.confirm = null; render(); },
   close: () => { UI.sheet = (UI.sheet && UI.sheet.parent) || null; UI.confirm = null; render(); },
   // routines
-  newRoutine: () => { const r = { id: uid('r'), name: '', order: Math.max(0, ...S.routines.map(x => x.order || 0)) + 1, blocks: [], updatedAt: now() }; S.routines.push(r); saveRoutine(r); UI.editId = r.id; UI.sel = r.id; UI.screen = 'edit'; UI.focus = '#r-name'; render(); },
+  newRoutine: () => {
+    const fromPlan = UI.screen === 'plan', pid = fromPlan ? UI.planId : (activePlan() || {}).id;
+    const r = { id: uid('r'), name: '', order: nextOrder(S.routines), blocks: [], updatedAt: now() }; if (pid) r.planId = pid;
+    S.routines.push(r); saveRoutine(r); UI.editId = r.id; if (!fromPlan || pid === S.settings.plan) UI.sel = r.id; UI.from = fromPlan ? 'plan' : null; UI.sheet = null; UI.screen = 'edit'; UI.focus = '#r-name'; render();
+  },
   editRoutine: d => { UI.editId = d.id; UI.screen = 'edit'; UI.sheet = null; render(); },
   editDone: () => {
     const r = curRoutine();
     if (blankRoutine(r)) { S.routines = S.routines.filter(x => x !== r); if (UI.sel === r.id) UI.sel = null; UI.editId = null; removeRoutineStore(r.id); }
     else if (r && !String(r.name).trim()) { r.name = 'Untitled routine'; saveRoutine(r); }
-    UI.screen = 'today'; UI.sheet = null; render();
+    UI.screen = UI.from === 'plan' && planById(UI.planId) ? 'plan' : 'today'; UI.from = null; UI.sheet = null; render();
   },
   dupRoutine: () => { const r = curRoutine(); if (!r) return; UI.sheet = null; const c = clone(r); c.id = uid('r'); c.name = (r.name || 'Routine') + ' copy'; c.order = (r.order || 0) + 0.5; S.routines.push(c); routinesSorted().forEach((x, i) => { x.order = i; saveRoutine(x); }); UI.editId = c.id; UI.sel = c.id; UI.focus = '#r-name'; toast('Copied. You’re editing the copy.'); },
-  delRoutine: () => { const r = curRoutine(); if (!r) return; UI.sheet = null; S.routines = S.routines.filter(x => x.id !== r.id); removeRoutineStore(r.id); UI.undoRoutine = r; UI.undoEx = pruneEx(slotsOf(r).map(s => s.exId)); UI.editId = null; UI.sel = null; UI.screen = 'today'; toast('Deleted ' + (r.name || 'routine') + '.', 'undoDelRoutine'); },
+  delRoutine: () => { const r = curRoutine(); if (!r) return; UI.sheet = null; S.routines = S.routines.filter(x => x.id !== r.id); removeRoutineStore(r.id); UI.undoRoutine = r; UI.undoEx = pruneEx(slotsOf(r).map(s => s.exId)); UI.editId = null; UI.sel = null; UI.screen = UI.from === 'plan' && planById(UI.planId) ? 'plan' : 'today'; UI.from = null; toast('Deleted ' + (r.name || 'routine') + '.', 'undoDelRoutine'); },
   undoDelRoutine: () => { const r = UI.undoRoutine; if (!r) return; (UI.undoEx || []).forEach(x => { S.exercises[x.id] = x; saveEx(x); }); S.routines.push(r); saveRoutine(r); UI.undoRoutine = null; UI.toast = null; UI.sel = r.id; render(); },
-  moveRoutine: d => { const rs = routinesSorted(), i = rs.findIndex(x => x.id === UI.editId), j = i + +d.d; if (i < 0 || j < 0 || j >= rs.length) return; [rs[i], rs[j]] = [rs[j], rs[i]]; rs.forEach((x, k) => { if (x.order !== k) { x.order = k; saveRoutine(x); } }); render(); },
+  moveRoutine: d => { const rs = routinesIn(planOf(curRoutine())), i = rs.findIndex(x => x.id === UI.editId), j = i + +d.d; if (i < 0 || j < 0 || j >= rs.length) return; [rs[i], rs[j]] = [rs[j], rs[i]]; rs.forEach((x, k) => { if (x.order !== k) { x.order = k; saveRoutine(x); } }); render(); },
   addExercise: () => { UI.focus = '#pick-q'; openSheet({ type: 'pick', mode: 'add', q: '' }); },
   addSuperset: () => { const r = curRoutine(); r.blocks.push({ kind: 'ss', rest: 90, parts: [] }); saveRoutine(r); openSheet({ type: 'ss', bi: r.blocks.length - 1, isNew: true, snap: null }); },
   addChecklist: () => { const r = curRoutine(); r.blocks.push({ kind: 'check', name: 'Warm-up', items: [{ text: '', detail: '', ticks: 1, timer: 0 }] }); saveRoutine(r); UI.focus = '[data-ci="0"][data-cf="text"]'; openSheet({ type: 'check', bi: r.blocks.length - 1, isNew: true, snap: null }); },
@@ -506,6 +599,7 @@ const A = {
     else if (f === 'rest') t.rest = clamp((t.rest || 0) + dv * 15, 0, 600);
     else if (f === 'ssrest') { const bl = sheetBlock(); bl.rest = clamp((bl.rest || 0) + dv * 15, 0, 600); }
     else if (f === 'warm') t.warm = clamp((t.warm || 0) + dv, 0, 4);
+    else if (f === 'bar') { const ex = exById(t.exId); if (ex) { ex.bar = clamp(r2((ex.bar != null ? ex.bar : 20) + dv * 2.5), 0, 50); saveEx(ex); } }
     else if (f === 'step') { const ex = exById(t.exId); if (ex) { const cur = ex.step || 2.5; ex.step = dv > 0 ? (STEPS.find(x => x > cur + 1e-9) || STEPS[STEPS.length - 1]) : (STEPS.slice().reverse().find(x => x < cur - 1e-9) || STEPS[0]); saveEx(ex); } }
     changed(); },
   repMode: d => { const t = sheetSlot(); if (!t) return; t.range = d.v === 'range'; if (t.range && (t.hi || 0) <= t.lo) t.hi = t.lo + 2; S.settings.rangeMode = t.range; saveSettings(); changed(); },
@@ -559,6 +653,9 @@ const A = {
   add: () => { const c = S.cur, t = target(c); if (!t) return; const b = liftAt(c, t), src = b.sets[b.sets.length - 1]; b.sets.push({ kind: 'work', reps: src.reps, kg: src.kg, done: false, skipped: false, touched: false, type: 0 }); touchCur(); render(); },
   plan: () => openSheet({ type: 'plan' }),
   slotMore: () => { UI.slotMore = true; render(); },
+  // equipment is optional: tapping the chosen one again clears it
+  equip: d => { const t = sheetSlot(), ex = t && exById(t.exId); if (!ex) return; if (ex.equip === d.v) delete ex.equip; else { ex.equip = d.v; if (d.v === 'barbell' && ex.bar == null) ex.bar = 20; } saveEx(ex); changed(); },
+  warmMode: d => { const t = sheetSlot(); if (!t) return; if (d.v === 'manual') t.warmMode = 'manual'; else delete t.warmMode; changed(); },
   ckSel: d => { UI.ckSel = UI.ckSel === +d.i ? null : +d.i; render(); },
   addMenu: () => openSheet({ type: 'addmenu' }),
   // a routine from pasted JSON
@@ -568,17 +665,56 @@ const A = {
     try { navigator.clipboard.readText().then(t => { if (UI.sheet !== sh) return; sh.text = t; sh.tried = true; render(); }, fail); } catch (e) { fail(); }
   },
   pasteExample: () => {
-    const sh = UI.sheet, fill = () => { sh.text = PASTE_EXAMPLE; sh.tried = false; render(); };
-    try { navigator.clipboard.writeText(PASTE_EXAMPLE).then(() => toast('Example copied.'), fill); } catch (e) { fill(); }
+    const sh = UI.sheet, ex = sh.plan ? PASTE_PLAN_EXAMPLE : PASTE_EXAMPLE, fill = () => { sh.text = ex; sh.tried = false; render(); };
+    try { navigator.clipboard.writeText(ex).then(() => toast('Example copied.'), fill); } catch (e) { fill(); }
   },
   pasteAdd: () => {
-    const sh = UI.sheet, r = curRoutine(); if (!r) return;
-    let plan; try { plan = readRoutineJson(sh.text); } catch (e) { sh.tried = true; render(); return; }
-    r.blocks.push(...blocksFromPlan(plan));
-    if (plan.name && !String(r.name || '').trim()) r.name = plan.name;
-    UI.sheet = null; UI.focus = null; saveRoutine(r); render();
+    const sh = UI.sheet;
+    let got; try { got = readPasteJson(sh.text); } catch (e) { sh.tried = true; render(); return; }
+    const make = (x, pid) => { const r = { id: uid('r'), name: x.name || 'Untitled routine', order: nextOrder(S.routines), blocks: blocksFromPlan(x), updatedAt: now() }; if (pid) r.planId = pid; S.routines.push(r); saveRoutine(r); return r; };
+    UI.sheet = null; UI.focus = null;
+    // into a plan: every routine it has (or the one routine) joins the plan
+    if (sh.plan) { const pl = planById(sh.plan); if (!pl) return render(); (got.kind === 'plan' ? got.routines : [got]).forEach(x => make(x, pl.id)); if (got.kind === 'plan' && got.name && !String(pl.name || '').trim()) pl.name = got.name; savePlan(pl); render(); return; }
+    const r = curRoutine(); if (!r) return render();
+    if (got.kind === 'routine' || got.routines.length === 1) {
+      const one = got.kind === 'routine' ? got : got.routines[0];
+      r.blocks.push(...blocksFromPlan(one));
+      if (one.name && !String(r.name || '').trim()) r.name = one.name;
+      saveRoutine(r); render(); return;
+    }
+    // a whole plan pasted into a new routine becomes a plan of its own
+    if (blankRoutine(r)) S.routines = S.routines.filter(x => x !== r);
+    const pl = { id: uid('p'), name: got.name || 'Pasted plan', order: nextOrder(S.plans), updatedAt: now() }; S.plans.push(pl);
+    got.routines.forEach(x => make(x, pl.id));
+    if (!activePlan()) S.settings.plan = pl.id;
+    savePlan(pl); UI.editId = null; UI.sel = null; UI.from = null; UI.planId = pl.id; UI.screen = 'plan'; render();
   },
   rMenu: () => openSheet({ type: 'rmenu' }),
+  rPlan: () => openSheet({ type: 'rplan', parent: null }),
+  rPlanSet: d => { const r = curRoutine(); if (!r) return; if (d.id) r.planId = d.id; else delete r.planId; r.order = nextOrder(S.routines); saveRoutine(r); UI.sheet = null; render(); },
+  // plans
+  planNew: () => { const pl = { id: uid('p'), name: '', order: nextOrder(S.plans), updatedAt: now() }; S.plans.push(pl); if (!activePlan()) S.settings.plan = pl.id; savePlan(pl); UI.planId = pl.id; UI.screen = 'plan'; UI.sheet = null; UI.focus = '#p-name'; render(); },
+  planOpen: d => { UI.planId = d.id; UI.screen = 'plan'; UI.sheet = null; render(); },
+  planDone: () => {
+    const pl = planById(UI.planId);
+    if (pl && !String(pl.name || '').trim()) { if (!routinesIn(pl.id).length) { S.plans = S.plans.filter(x => x !== pl); if (S.settings.plan === pl.id) S.settings.plan = null; } else pl.name = 'Untitled plan'; saveLocal(); }
+    UI.screen = 'today'; UI.sheet = null; render();
+  },
+  planUse: () => { S.settings.plan = UI.planId; UI.sel = null; saveSettings(); UI.sheet = null; UI.screen = 'today'; render(); },
+  planStop: () => { S.settings.plan = null; UI.sel = null; saveSettings(); UI.sheet = null; render(); },
+  planDelete: () => {
+    const pl = planById(UI.planId); if (!pl) return;
+    const ids = S.routines.filter(r => r.planId === pl.id).map(r => r.id), was = S.settings.plan === pl.id;
+    S.routines.forEach(r => { if (r.planId === pl.id) { delete r.planId; saveRoutine(r); } });
+    S.plans = S.plans.filter(x => x !== pl); if (was) S.settings.plan = null; saveLocal();
+    UI.undoPlan = { pl, ids, was }; UI.sheet = null; UI.sel = null; UI.screen = 'today'; toast('Deleted ' + (pl.name || 'the plan') + '. Its routines are kept.', 'undoPlan');
+  },
+  undoPlan: () => { const u = UI.undoPlan; if (!u) return; S.plans.push(u.pl); S.routines.forEach(r => { if (u.ids.includes(r.id)) { r.planId = u.pl.id; saveRoutine(r); } }); if (u.was) S.settings.plan = u.pl.id; saveLocal(); UI.undoPlan = null; UI.toast = null; render(); },
+  planRoutine: d => { UI.editId = d.id; UI.from = 'plan'; UI.screen = 'edit'; UI.sheet = null; render(); },
+  planAdd: () => openSheet({ type: 'padd' }),
+  pMenu: () => openSheet({ type: 'pmenu' }),
+  planPaste: () => openSheet({ type: 'paste', text: '', plan: UI.planId }),
+  planMoveIn: d => { const r = routineById(d.id); if (!r) return; r.planId = UI.planId; r.order = nextOrder(S.routines); saveRoutine(r); UI.sheet = null; render(); },
   planNow: d => { const c = S.cur, t = nextOpen(c), bi = +d.bi; if (!t || bi === t.bi) { UI.sheet = null; render(); return; } const [b] = c.blocks.splice(bi, 1); c.blocks.splice(t.bi > bi ? t.bi - 1 : t.bi, 0, b); c.pick = null; c.fix = null; c.over = null; UI.sheet = null; UI.showWarm = false; UI.scrollToCard = true; touchCur(); render(); },
   planMove: d => { const c = S.cur, bi = +d.bi, j = bi + +d.d; if (j < 0 || j >= c.blocks.length || blockState(c.blocks[j]) !== 'open') return; [c.blocks[bi], c.blocks[j]] = [c.blocks[j], c.blocks[bi]]; c.pick = null; c.fix = null; touchCur(); render(); },
   planSkip: d => { const c = S.cur, b = c.blocks[+d.bi]; if (b.kind === 'check') b.skipped = true; else blockSets(b).forEach(x => { if (isOpen(x)) x.skipped = true; }); c.pick = null; c.fix = null; if (c.cardio && c.cardio.bi === +d.bi) c.cardio = null; touchCur(); if (!nextOpen(c)) { UI.sheet = null; finish(); return; } render(); },
@@ -642,7 +778,7 @@ $app.addEventListener('change', e => {
   if (e.target.id !== 'restore-file' || !e.target.files || !e.target.files[0]) return;
   e.target.files[0].text().then(t => {
     const n = restoreFrom(JSON.parse(t)); UI.sheet = null; UI.sel = null; render();
-    const got = [n.routines && plural(n.routines, 'routine'), n.sessions && plural(n.sessions, 'workout')].filter(Boolean);
+    const got = [n.plans && plural(n.plans, 'plan'), n.routines && plural(n.routines, 'routine'), n.sessions && plural(n.sessions, 'workout')].filter(Boolean);
     toast(got.length ? 'Restored ' + got.join(' and ') + '.' : 'Nothing new in that backup.');
   }).catch(() => toast('That file isn’t a Jim backup.'));
 });
@@ -666,6 +802,7 @@ $app.addEventListener('input', e => {
   if (el.id === 'notes') { const ex = exById(el.dataset.ex); if (ex) { ex.notes = el.value; saveEx(ex); } return; }
   if (el.id === 'paste-json') { UI.sheet.text = el.value; UI.sheet.tried = false; const st = document.getElementById('paste-status'); if (st) st.innerHTML = pasteStatusHtml(UI.sheet); return; }
   if (el.id === 'pick-q') { UI.sheet.q = el.value; const pl = document.querySelector('.picklist'); if (pl) { pl.innerHTML = pickListHtml(); pl.parentNode.scrollTop = 0; } sheetEdges(); return; }
+  if (el.dataset.pf === 'name') { const pl = planById(UI.planId); if (pl) { pl.name = el.value; savePlan(pl); } return; }
   const r = curRoutine(); if (!r) return;
   if (el.dataset.rf === 'name') { r.name = el.value; saveRoutine(r); return; }
   if (el.dataset.f === 'exname') { const t = sheetSlot(), ex = t && exById(t.exId); if (ex) { ex.name = el.value; saveEx(ex); } return; }
@@ -758,6 +895,7 @@ function endDrag(cancel) {
   if (!active) return;
   drag.dropped = performance.now(); // the click that ends a drag isn't a tap
   if (cancel || to === from) return;
+  if (list.dataset.dragList === 'routines') { const rs = routinesIn(UI.planId), [mv] = rs.splice(from, 1); rs.splice(to, 0, mv); rs.forEach((x, k) => { if (x.order !== k) { x.order = k; saveRoutine(x); } }); render(); return; }
   const r = curRoutine(); if (!r) return;
   const arr = list.dataset.dragList === 'parts' ? (sheetBlock() || {}).parts : r.blocks; if (!arr) return;
   const [moved] = arr.splice(from, 1); arr.splice(to, 0, moved);
@@ -779,7 +917,7 @@ function syncHistory() {
 function goBack() {
   const sh = UI.sheet;
   if (sh) { if (UI.screen === 'edit') (sh.type === 'pick' ? A.pickCancel : A.done)(); else A.close(); return; }
-  if (UI.screen === 'edit') A.editDone(); else if (UI.screen === 'train') A.toToday(); else if (UI.screen === 'summary') A.summaryDone(); else render();
+  if (UI.screen === 'edit') A.editDone(); else if (UI.screen === 'plan') A.planDone(); else if (UI.screen === 'train') A.toToday(); else if (UI.screen === 'summary') A.summaryDone(); else render();
 }
 window.addEventListener('popstate', e => {
   if (ignorePop) { ignorePop--; return; }
@@ -887,8 +1025,9 @@ function liftActions(c, b, t) {
 // The set you're on: big numbers you can tap to type, with − and + under each.
 function bigSet(b, x) {
   const v = kgVal(x.kg), size = v.length >= 5 ? ' s' : v.length >= 4 ? ' m' : '';
-  const cap1 = x.kind === 'warm' ? (x.frac === 'easy' ? 'easy reps' : Math.round(x.frac * 100) + '% of ' + (workKg(b) == null ? 'working' : kgVal(workKg(b)) + unit(workKg(b)))) : 'reps · aim ' + range(b.lo, b.hi);
-  const cap2 = x.kg == null ? (x.kind === 'warm' ? 'set working weight' : 'set a weight') : x.kg === 0 ? 'bodyweight' : 'kg';
+  const W = workKg(b);
+  const cap1 = x.kind !== 'warm' ? 'reps · aim ' + range(b.lo, b.hi) : x.frac === 'easy' ? 'easy reps' : x.frac === 'bar' ? 'empty bar' : typeof x.frac === 'number' && W ? Math.round(x.frac * 100) + '% of ' + kgVal(W) + unit(W) : 'reps';
+  const cap2 = x.kg == null ? (x.kind === 'warm' && b.warmAuto !== false ? 'set working weight' : 'set a weight') : x.kg === 0 ? 'bodyweight' : b.equip === 'dumbbell' ? 'kg each' : 'kg';
   const col = (val, cls, pad, dn, up, cap, name, less, more) => '<div class="fcol"><button class="fval' + cls + '" data-a="' + pad + '" aria-label="' + name + ': ' + esc(val) + ', tap to type">' + esc(val) + '</button>' +
     '<div class="fpm"><button data-a="' + dn + '" aria-label="' + less + '">' + ICON.minus + '</button><button data-a="' + up + '" aria-label="' + more + '">' + ICON.plus + '</button></div><span class="fcap">' + esc(cap) + '</span></div>';
   return '<div class="fnums">' + col(String(x.reps), '', 'padReps', 'repsDn', 'repsUp', cap1, 'Reps', 'One fewer rep', 'One more rep') + '<span class="fx" aria-hidden="true">×</span>' +
@@ -979,20 +1118,61 @@ function todayScreen() {
   const d = new Date(), c = S.cur, rs = routinesSorted(), sug = suggestedRoutine(), sel = routineById(UI.sel) || sug;
   let main;
   if (c) main = '<div class="wcard" style="margin-top:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><b style="font-size:22px;min-width:0">' + esc(c.name) + '</b><span data-tick="elapsed" style="font-size:17px">' + mmss(now() - c.startedAt) + '</span></div><div style="margin-top:10px">' + pipsHtml(c, false, true) + '</div><button class="primary" style="width:100%;margin-top:16px" data-a="resume">Resume</button></div>';
-  else if (!rs.length) main = '<button class="ghost ink" style="margin-top:16px;height:56px" data-a="newRoutine">' + ICON.plus + 'New routine</button>';
   else {
-    const others = rs.filter(r => r !== sel);
-    main = (sel === sug ? '<p class="eyebrow2">Next up</p><div class="wcard hero4">' : '<div class="wcard hero4 solo">') + '<b class="hn">' + esc(sel.name || 'Untitled routine') + '</b><span class="hm">' + esc(routineSummary(sel)) + '</span>' +
+    const ap = activePlan(), inPlan = ap ? routinesIn(ap.id) : [], plans = plansSorted().filter(pl => pl !== ap), loose = routinesIn(null);
+    const rrow = r => '<button class="orow" data-a="pickRoutine" data-id="' + esc(r.id) + '"><span style="min-width:0"><b>' + esc(r.name || 'Untitled routine') + '</b><span class="sub">' + esc(routineSummary(r)) + '</span></span>' + (r === sug ? '<span class="tag">Next</span>' : '') + ICON.chev + '</button>';
+    const prow = pl => { const n = routinesIn(pl.id).length; return '<button class="orow" data-a="planOpen" data-id="' + esc(pl.id) + '"><span style="min-width:0"><b>' + esc(pl.name || 'Untitled plan') + '</b><span class="sub">' + (n ? plural(n, 'routine') : 'No routines yet') + '</span></span>' + ICON.chev + '</button>'; };
+    const list = (title, rows, link) => rows.length || link ? '<div class="sechead"><h2 class="h2 sm">' + title + '</h2>' + (link || '') + '</div>' + (rows.length ? '<div class="others">' + rows.join('') + '</div>' : '') : '';
+    const buttons = '<div class="twobtn"><button class="ghost ink" data-a="newRoutine">' + ICON.plus + 'New routine</button><button class="ghost ink" data-a="planNew">' + ICON.plus + 'New plan</button></div>';
+    let hero = '';
+    if (ap && !inPlan.length) hero = '<p class="eyebrow2">Your plan</p><div class="wcard hero4"><b class="hn">' + esc(ap.name || 'Untitled plan') + '</b><span class="hm">No routines in it yet</span><div class="cardbtns"><button class="primary" data-a="planOpen" data-id="' + esc(ap.id) + '">Add routines</button></div></div>';
+    else if (sel) hero = (sel === sug ? '<p class="eyebrow2">Next up' + (ap ? ' · ' + esc(ap.name || 'Untitled plan') : '') + '</p><div class="wcard hero4">' : '<div class="wcard hero4 solo">') + '<b class="hn">' + esc(sel.name || 'Untitled routine') + '</b><span class="hm">' + esc(routineSummary(sel)) + '</span>' +
       '<p class="hx">' + esc((sel.blocks || []).map(blockName).join(' · ') || 'Empty') + '</p>' +
-      '<div class="cardbtns"><button class="ghost" data-a="editRoutine" data-id="' + esc(sel.id) + '">Edit</button><button class="primary" data-a="start">Start</button></div></div>' +
-      (others.length ? '<h2 class="h2 sm">Other routines</h2><div class="others">' + others.map(r => '<button class="orow" data-a="pickRoutine" data-id="' + esc(r.id) + '"><span style="min-width:0"><b>' + esc(r.name || 'Untitled routine') + '</b><span class="sub">' + esc(routineSummary(r)) + '</span></span>' + (r === sug ? '<span class="tag">Next</span>' : '') + ICON.chev + '</button>').join('') + '</div>' : '') +
-      '<button class="ghost ink" data-a="newRoutine">' + ICON.plus + 'New routine</button>';
+      '<div class="cardbtns"><button class="ghost" data-a="editRoutine" data-id="' + esc(sel.id) + '">Edit</button><button class="primary" data-a="start">Start</button></div></div>';
+    if (!rs.length && !(S.plans || []).length) main = buttons.replace('class="twobtn"', 'class="twobtn first"');
+    else if (ap) main = hero +
+      list('In this plan', inPlan.filter(r => r !== sel).map(rrow), '<button class="txtlink" data-a="planOpen" data-id="' + esc(ap.id) + '">Edit plan</button>') +
+      list('Other plans', plans.map(prow)) + list('Not in a plan', loose.filter(r => r !== sel).map(rrow)) + buttons;
+    else main = hero + list(plans.length ? 'Routines' : 'Other routines', loose.filter(r => r !== sel).map(rrow)) + list('Plans', plans.map(prow)) + buttons;
   }
   const hist = sortedSessions().slice(0, 6);
   return '<div class="screen paperscreen">' +
     '<p class="date">' + d.toLocaleDateString('en-NZ', { weekday: 'long' }) + ' ' + d.getDate() + ' ' + d.toLocaleDateString('en-NZ', { month: 'long' }) + '</p><h1 class="h1">Today</h1>' + main +
     (hist.length ? '<h2 class="h2">Recent</h2>' + hist.map(s => { const n = liftsOf(s).reduce((a, b) => a + b.sets.filter(x => x.kind === 'work' && x.done).length, 0); return '<button class="hist" data-a="openSession" data-id="' + esc(s.id) + '"><span><b>' + esc(dateTxt(s.endedAt)) + '</b> · ' + esc(s.name) + '</span><span>' + Math.max(1, Math.round((s.endedAt - s.startedAt) / 60000)) + ' min, ' + n + ' sets</span></button>'; }).join('') : '') +
     '<div class="foot"><span>' + esc(backupTxt()) + '</span><div><button data-a="backup">Backup</button><button data-a="sound" aria-pressed="' + S.settings.sound + '">Sound: ' + (S.settings.sound ? 'on' : 'off') + '</button></div></div></div>';
+}
+// A plan: its name, its routines (drag to reorder, tap to edit), Use this plan, and Add.
+const gripHtml = '<span class="grip" data-grip aria-hidden="true">' + ICON.grip + '</span>';
+function planScreen() {
+  const pl = planById(UI.planId); if (!pl) { UI.screen = 'today'; return todayScreen(); }
+  const rs = routinesIn(pl.id), using = S.settings.plan === pl.id;
+  const rows = rs.map(r => '<button class="blk" data-a="planRoutine" data-id="' + esc(r.id) + '" data-drag>' + gripHtml + '<span class="m"><b>' + esc(r.name || 'Untitled routine') + '</b><span class="sub">' + esc(routineSummary(r)) + '</span></span>' + ICON.chev + '</button>').join('');
+  return '<div class="screen paperscreen">' +
+    '<div class="etop"><button data-a="planDone">' + ICON.back + 'Today</button><span class="etop-r"><button class="dots3" data-a="pMenu" aria-label="Plan options">•••</button><button data-a="planDone">Done</button></span></div>' +
+    '<input id="p-name" class="pin" autocapitalize="sentences" enterkeyhint="done" data-pf="name" value="' + esc(pl.name) + '" placeholder="Plan name" aria-label="Plan name" autocomplete="off">' +
+    (using ? '<p class="planstate">' + ICON.check + 'You’re using this plan</p>' : '<button class="primary dark useplan" data-a="planUse">Use this plan</button>') +
+    (rows ? '<div class="blks" data-drag-list="routines">' + rows + '</div>' : '<p class="planempty">No routines in this plan yet.</p>') +
+    '<button class="addone" data-a="planAdd">' + ICON.plus + 'Add</button></div>';
+}
+function planAddSheet() {
+  const pl = planById(UI.planId), out = routinesSorted().filter(r => planOf(r) !== UI.planId);
+  const row = (a, label, sub, extra) => '<button class="menurow" data-a="' + a + '"' + (extra || '') + '>' + (sub == null ? ICON.plus : '') + '<span>' + esc(label) + (sub != null ? '<small class="menusub">' + esc(sub) + '</small>' : '') + '</span></button>';
+  return sheetBox('Add to ' + ((pl && pl.name) || 'plan'), '<h2>Add</h2>', '<div class="menu">' + row('newRoutine', 'New routine') + row('planPaste', 'Paste JSON') + '</div>' +
+    (out.length ? '<p class="menuhead">Move a routine in</p><div class="menu">' + out.map(r => row('planMoveIn', r.name || 'Untitled routine', planOf(r) ? 'In ' + (planById(planOf(r)).name || 'another plan') : 'Not in a plan', ' data-id="' + esc(r.id) + '"')).join('') + '</div>' : ''),
+    '<button class="wide" data-a="close">Cancel</button>');
+}
+function planMenuSheet() {
+  const pl = planById(UI.planId); if (!pl) return '';
+  const using = S.settings.plan === pl.id;
+  return sheetBox('Plan', '<h2>' + esc(pl.name || 'Untitled plan') + '</h2>', '<div class="menu">' +
+    (using ? '<button class="menurow" data-a="planStop"><span>Stop using this plan</span></button>' : '<button class="menurow" data-a="planUse"><span>Use this plan</span></button>') +
+    '<button class="menurow danger" data-a="planDelete"><span>Delete plan<small class="menusub">Its routines are kept</small></span></button></div>', '<button class="wide" data-a="close">Close</button>');
+}
+// Which plan a routine is in, from its ••• menu.
+function rPlanSheet() {
+  const r = curRoutine(); if (!r) return '';
+  const cur = planOf(r), row = (id, label) => '<button class="menurow' + (id === cur ? ' on' : '') + '" data-a="rPlanSet" data-id="' + esc(id || '') + '" aria-pressed="' + (id === cur) + '"><span>' + esc(label) + '</span>' + (id === cur ? ICON.check : '') + '</button>';
+  return sheetBox('Plan', '<h2>Which plan?</h2>', '<div class="menu">' + plansSorted().map(pl => row(pl.id, pl.name || 'Untitled plan')).join('') + row(null, 'Not in a plan') + '</div>', '<button class="wide" data-a="close">Close</button>');
 }
 function editScreen() {
   const r = curRoutine(); if (!r) { UI.screen = 'today'; return todayScreen(); }
@@ -1001,10 +1181,10 @@ function editScreen() {
     if (b.kind === 'check') { name = b.name || 'Checklist'; sub = (b.items || []).filter(it => it.text).map(it => it.text).join(', ') || 'Checklist'; }
     else if (b.kind === 'ss') { name = (b.parts || []).map(p => exName(p.exId)).join(' + ') || 'Empty superset'; sub = 'Superset, ' + ((b.parts || []).map(p => (p.sets || 3) + ' × ' + repsTxt(p)).join(', ') || 'no exercises') + ', rest ' + secTxt(b.rest || 0); }
     else { name = exName(b.exId); sub = (b.sets || 3) + ' × ' + repsTxt(b) + ', rest ' + secTxt(b.rest || 0) + (b.warm ? ', ' + plural(b.warm, 'warm-up') : ''); }
-    return '<button class="blk" data-a="openBlock" data-bi="' + bi + '" data-drag>' + '<span class="grip" data-grip aria-hidden="true">' + ICON.grip + '</span>' + '<span class="m"><b>' + esc(name) + '</b><span class="sub">' + esc(sub) + '</span></span>' + ICON.chev + '</button>';
+    return '<button class="blk" data-a="openBlock" data-bi="' + bi + '" data-drag>' + gripHtml + '<span class="m"><b>' + esc(name) + '</b><span class="sub">' + esc(sub) + '</span></span>' + ICON.chev + '</button>';
   }).join('');
   return '<div class="screen paperscreen">' +
-    '<div class="etop"><button data-a="editDone">' + ICON.back + 'Today</button><span class="etop-r"><button class="dots3" data-a="rMenu" aria-label="Routine options">•••</button><button data-a="editDone">Done</button></span></div>' +
+    '<div class="etop"><button data-a="editDone" class="backname">' + ICON.back + '<span>' + esc(UI.from === 'plan' && planById(UI.planId) ? planById(UI.planId).name || 'Plan' : 'Today') + '</span></button><span class="etop-r"><button class="dots3" data-a="rMenu" aria-label="Routine options">•••</button><button data-a="editDone">Done</button></span></div>' +
     '<input id="r-name" class="pin" autocapitalize="sentences" enterkeyhint="done" data-rf="name" value="' + esc(r.name) + '" placeholder="Routine name" aria-label="Routine name" autocomplete="off">' +
     (rows ? '<div class="blks" data-drag-list="blocks">' + rows + '</div>' : '') +
     '<button class="addone" data-a="addMenu">' + ICON.plus + 'Add</button>' +
@@ -1086,6 +1266,7 @@ function fieldText(act, f, i) {
   if (f === 'rest') return secTxt(t.rest || 0);
   if (f === 'ssrest') return secTxt(sheetBlock().rest || 0);
   if (f === 'warm') return String(t.warm || 0);
+  if (f === 'bar') { const ex = exById(t.exId); return fmt(ex && ex.bar != null ? ex.bar : 20) + ' kg'; }
   if (f === 'step') { const ex = exById(t.exId); return fmt((ex && ex.step) || 2.5) + ' kg'; }
   return '';
 }
@@ -1097,6 +1278,7 @@ function setSlotField(f, v) {
   else if (f === 'rest') t.rest = clamp(Math.round(v), 0, 600);
   else if (f === 'ssrest') { const bl = sheetBlock(); bl.rest = clamp(Math.round(v), 0, 600); }
   else if (f === 'warm') t.warm = clamp(Math.round(v), 0, 4);
+  else if (f === 'bar') { const ex = exById(t.exId); if (ex) { ex.bar = clamp(r2(v), 0, 50); saveEx(ex); } }
   else if (f === 'step') { const ex = exById(t.exId); if (ex) { ex.step = clamp(r2(v), 0.25, 50); saveEx(ex); } }
   saveRoutine(curRoutine());
 }
@@ -1147,13 +1329,18 @@ function slotSheet() {
   const used = exUsage(t.exId).filter(n => n !== (r.name || 'Untitled routine'));
   const reps = t.range ? stp('Low', 'lo', t.lo) + stp('High', 'hi', Math.max(t.lo, t.hi || t.lo)) : stp('Reps', 'lo', t.lo);
   const folded = !UI.slotMore;
-  const more = folded ? '<button class="morebtn" data-a="slotMore"><span class="mb-t"><b>More</b><span class="sub">' + (t.warm ? plural(t.warm, 'warm-up set') : 'No warm-ups') + ' · goes up by ' + fmt(ex.step || 2.5) + ' kg</span></span>' + ICON.chev + '</button>' : '';
+  const eq = ex.equip, bar = ex.bar != null ? ex.bar : 20;
+  const summary = [eq ? EQUIP[eq] + (eq === 'barbell' ? ', ' + fmt(bar) + ' kg bar' : '') : '', isPart ? '' : t.warm ? plural(t.warm, 'warm-up') + (t.warmMode === 'manual' ? ' you set' : '') : 'No warm-ups', 'goes up by ' + fmt(ex.step || 2.5) + ' kg'].filter(Boolean).join(' · ');
+  const more = folded ? '<button class="morebtn" data-a="slotMore"><span class="mb-t"><b>More</b><span class="sub">' + esc(summary) + '</span></span>' + ICON.chev + '</button>' : '';
+  const equipRow = '<div class="eqrow"><span>Equipment</span><div class="eqgrid" role="group" aria-label="Equipment, optional">' + Object.entries(EQUIP).map(([k, l]) => '<button class="' + (eq === k ? 'on' : '') + '" data-a="equip" data-v="' + k + '" aria-pressed="' + (eq === k) + '">' + l + '</button>').join('') + '</div></div>';
+  const warmRows = isPart ? '' : stp('Warm-up sets', 'warm', t.warm || 0) + (t.warm ? '<div class="stp"><span>Warm-up weights</span><div class="seg2" role="group" aria-label="Warm-up weights"><button class="' + (t.warmMode === 'manual' ? '' : 'on') + '" data-a="warmMode" data-v="auto" aria-pressed="' + (t.warmMode !== 'manual') + '">Auto</button><button class="' + (t.warmMode === 'manual' ? 'on' : '') + '" data-a="warmMode" data-v="manual" aria-pressed="' + (t.warmMode === 'manual') + '">Manual</button></div></div>' : '');
+  const opened = equipRow + (eq === 'barbell' ? stp('Bar', 'bar', fmt(bar) + ' kg', { kind: 'dec' }) : '') + warmRows + stp('Goes up by', 'step', fmt(ex.step || 2.5) + ' kg', { kind: 'dec' });
   return sheetBox(ex.name,
     '<div class="namerow"><input id="e-name" class="sin lg" autocapitalize="sentences" enterkeyhint="done" data-f="exname" value="' + esc(ex.name) + '" aria-label="Exercise name" autocomplete="off"><button data-a="swapEx">Change</button></div>' +
     (used.length ? '<p class="dim small" style="margin-top:6px">Also in ' + esc(used.join(', ')) + '</p>' : ''),
     '<div style="margin-top:8px">' + stp('Sets', 'sets', t.sets || 3) +
     '<div class="stp"><span>Reps</span><div class="seg2" role="group" aria-label="Fixed reps or a range"><button class="' + (t.range ? '' : 'on') + '" data-a="repMode" data-v="single" aria-pressed="' + !t.range + '">Fixed</button><button class="' + (t.range ? 'on' : '') + '" data-a="repMode" data-v="range" aria-pressed="' + !!t.range + '">Range</button></div></div>' + reps +
-    (isPart ? '' : stp('Rest', 'rest', secTxt(t.rest || 0), { kind: 'dur' })) + (folded ? more : stp('Warm-up sets', 'warm', t.warm || 0) + stp('Goes up by', 'step', fmt(ex.step || 2.5) + ' kg', { kind: 'dec' })) + '</div>' +
+    (isPart ? '' : stp('Rest', 'rest', secTxt(t.rest || 0), { kind: 'dur' })) + (folded ? more : opened) + '</div>' +
     removeRow(isPart || !sh.isNew),
     '', { title: isPart ? 'Superset exercise' : 'Exercise', cancel: 'cancel', done: 'done' });
 }
@@ -1260,9 +1447,10 @@ function addMenuSheet() {
   return sheetBox('Add', '<h2>Add</h2>', '<div class="menu">' + row('addExercise', 'Exercise') + row('addSuperset', 'Superset') + row('addChecklist', 'Checklist') + '</div>', '<button class="wide" data-a="close">Cancel</button>');
 }
 function rMenuSheet() {
-  const rs = routinesSorted(), pos = rs.findIndex(x => x.id === UI.editId);
+  const r = curRoutine(), rs = routinesIn(planOf(r)), pos = rs.findIndex(x => x.id === UI.editId), pl = planById(planOf(r));
   const row = (a, label, extra) => '<button class="menurow" data-a="' + a + '"' + (extra || '') + '><span>' + label + '</span></button>';
-  return sheetBox('Routine', '<h2>' + esc((curRoutine() || {}).name || 'Routine') + '</h2>', '<div class="menu">' +
+  return sheetBox('Routine', '<h2>' + esc((r || {}).name || 'Routine') + '</h2>', '<div class="menu">' +
+    '<button class="menurow" data-a="rPlan"><span>Plan<small class="menusub">' + esc(pl ? pl.name || 'Untitled plan' : 'Not in a plan') + '</small></span>' + ICON.chev + '</button>' +
     (rs.length > 1 ? row('moveRoutine', 'Move up in the list', ' data-d="-1"' + (pos === 0 ? ' disabled' : '')) + row('moveRoutine', 'Move down in the list', ' data-d="1"' + (pos === rs.length - 1 ? ' disabled' : '')) : '') +
     row('dupRoutine', 'Duplicate') + '<button class="menurow danger" data-a="delRoutine"><span>Delete</span></button></div>', '<button class="wide" data-a="close">Close</button>');
 }
@@ -1270,7 +1458,7 @@ function pasteSheet() {
   const sh = UI.sheet;
   return sheetBox('Paste JSON', '',
     '<div class="pasterow"><button class="ghost" data-a="pasteClip" aria-label="Paste from clipboard">Paste</button><button class="ghost" data-a="pasteExample">Copy example</button></div>' +
-    '<textarea id="paste-json" class="pastebox" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Routine as JSON" placeholder="{ &quot;name&quot;: &quot;Push day&quot;, &quot;items&quot;: [ … ] }">' + esc(sh.text || '') + '</textarea>' +
+    '<textarea id="paste-json" class="pastebox" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Routine as JSON" placeholder="' + (sh.plan ? '{ &quot;plan&quot;: &quot;Push Pull Legs&quot;, &quot;routines&quot;: [ … ] }' : '{ &quot;name&quot;: &quot;Push day&quot;, &quot;items&quot;: [ … ] }&#10;&#10;or a whole plan:&#10;{ &quot;plan&quot;: …, &quot;routines&quot;: [ … ] }') + '">' + esc(sh.text || '') + '</textarea>' +
     '<p class="pastest" id="paste-status" role="status">' + pasteStatusHtml(sh) + '</p>',
     '', { title: 'Paste JSON', cancel: 'close', done: 'pasteAdd' });
 }
@@ -1285,7 +1473,8 @@ function backupSheet() {
 function sheetHtml() {
   const sh = UI.sheet; if (!sh) return '';
   const ty = sh.type, c = S.cur;
-  if (UI.screen === 'edit') return ty === 'pick' ? pickSheet() : ty === 'slot' ? slotSheet() : ty === 'ss' ? ssSheet() : ty === 'check' ? checkSheet() : ty === 'addmenu' ? addMenuSheet() : ty === 'rmenu' ? rMenuSheet() : ty === 'paste' ? pasteSheet() : '';
+  if (UI.screen === 'edit') return ty === 'pick' ? pickSheet() : ty === 'slot' ? slotSheet() : ty === 'ss' ? ssSheet() : ty === 'check' ? checkSheet() : ty === 'addmenu' ? addMenuSheet() : ty === 'rmenu' ? rMenuSheet() : ty === 'rplan' ? rPlanSheet() : ty === 'paste' ? pasteSheet() : '';
+  if (UI.screen === 'plan') return ty === 'padd' ? planAddSheet() : ty === 'pmenu' ? planMenuSheet() : ty === 'paste' ? pasteSheet() : '';
   if (ty === 'session') return sessionSheet();
   if (ty === 'backup') return backupSheet();
   if (!c) return '';
@@ -1304,6 +1493,7 @@ function render() {
   const c = S.cur;
   if (UI.screen === 'summary') { html = summaryScreen(); cls = 'paper'; }
   else if (UI.screen === 'edit') { html = editScreen(); cls = 'paper'; }
+  else if (UI.screen === 'plan') { html = planScreen(); cls = 'paper'; }
   else if (UI.screen === 'train' && c) {
     const t = nextOpen(c);
     if (!t) { finish(); return; }
