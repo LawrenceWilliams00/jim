@@ -124,6 +124,19 @@ test('trains a routine, and another routine sees the same history', async ({ pag
   await expect(page.locator('#card')).toContainText('last 4 × 62.5');
 });
 
+test('a new rep range starts from your est. 1RM, not the weight you did for fewer reps', async ({ page }) => {
+  const seed = JSON.parse(backup);
+  seed.routines.push({ id: 'rC', name: 'Day C', order: 1, updatedAt: 1, blocks: [{ kind: 'lift', exId: 'x-bench-press', sets: 3, lo: 10, hi: 12, range: true, rest: 90, warm: 0 }] });
+  const { tap } = await open(page, { seed: JSON.stringify(seed) });
+  await expect(page.locator('.hero4')).toContainText('Day C');
+  await tap('Start');
+  // Bench was 6 × 60 kg at 4–6: an est. 1RM of 72 kg. The top of 10–12 at that is 51.4 kg, so 50 kg.
+  await expect(page.getByRole('button', { name: 'Weight: 50, tap to type' })).toBeVisible();
+  await expect(page.locator('#card')).toContainText('from your 6 × 60 kg');
+  await tap('Log set 1');
+  await expect(page.locator('.screen')).toContainText('first time at 10–12');
+});
+
 test('backs up to a file and restores from one', async ({ page }) => {
   const { tap } = await open(page);
   await tap('Backup');

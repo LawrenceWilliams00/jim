@@ -61,6 +61,11 @@ A whole plan is a list of routines: `{ "plan": "Push Pull Legs", "routines": [ {
 - Checklist items are text (`"Name | detail"`) or `{ "text", "detail", "ticks" }`, or `{ "text", "timer" }` with the timer in minutes.
 - Anything you leave out gets the usual defaults. Code fences, text around the JSON, curly quotes and trailing commas are all fine.
 
+## Starting weights
+
+- Each exercise's history is shared across routines, but weights follow the rep range. When every set hit the top of the range last time, Jim adds the exercise's step; otherwise it repeats last time's weight and reps.
+- The first time you do an exercise at a new rep range, Jim starts from your best set at another range: it works out your est. 1RM, then the weight you'd get the top of the new range with, rounded down. 4 reps at 80 kg means 10–12 starts at 62.5 kg, not 80. The set shows what it was worked out from.
+
 ## Warm-ups
 
 Warm-ups are worked out from your working weight, the weight of your first working set, not a 1-rep max.

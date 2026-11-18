@@ -183,10 +183,11 @@ function liftBlock(slot, ssRest, src) {
   const ex = exById(slot.exId) || { id: slot.exId, name: 'Untitled exercise', step: 2.5 };
   const step = ex.step || 2.5, lo = slot.lo || 8, hi = slot.range ? Math.max(lo, slot.hi || lo) : lo;
   const n = clamp(slot.sets || 3, 1, 12);
-  const last = lastFor(ex.id, lo, hi);
+  const last = lastFor(ex.id, lo, hi), est = last && !last.same ? estStart(ex, last, hi, step) : null;
   let kg = null, reps = [];
-  if (last) { kg = last.same && last.allTop ? r2(last.kg + step) : last.kg; reps = last.same && !last.allTop ? last.sets.map(x => x.reps) : []; }
+  if (last) { kg = est ? est.kg : last.same && last.allTop ? r2(last.kg + step) : last.kg; reps = last.same && !last.allTop ? last.sets.map(x => x.reps) : []; }
   const b = { kind: 'lift', exId: ex.id, key: ex.id, name: ex.name, step, lo, hi, rest: ssRest != null ? ssRest : (slot.rest != null ? slot.rest : 90), src, sets: [] };
+  if (est) b.est = est.from;
   // Equipment: barbell warm-ups start at the bar; a bodyweight lift starts at bodyweight rather than asking for a weight.
   if (kg == null && ex.equip === 'bodyweight') kg = 0;
   // No warm-ups inside a superset: its rounds pair sets up by position.
@@ -196,6 +197,17 @@ function liftBlock(slot, ssRest, src) {
   for (let i = 0; i < n; i++) b.sets.push({ kind: 'work', reps: reps[i] != null ? reps[i] : (reps.length ? reps[reps.length - 1] : lo), kg, done: false, skipped: false, touched: false, type: 0 });
   refreshWarm(b);
   return b;
+}
+// First time at this rep range: from your best set at another range, work out your est. 1RM, then the weight you'd
+// get the top of this range with, rounded down. Done for 4 at 80 kg, 10–12 starts at 62.5 kg, not 80.
+function estStart(ex, last, hi, step) {
+  const bwLift = ex.equip === 'bodyweight', bw = bwLift ? bwAt(last.at) || 0 : 0, nowBw = bwLift ? bwAt(now()) || bw : 0;
+  const best = last.sets.reduce((a, x) => { const e = est1(x.reps, (x.kg || 0) + bw); return e > a.e ? { e, x } : a; }, { e: 0, x: null });
+  if (!best.x) return null;
+  let kg = r2(Math.floor((best.e / (1 + hi / 30) - nowBw) / step + 1e-6) * step);
+  const min = bwLift ? 0 : ex.equip === 'barbell' ? (ex.bar != null ? ex.bar : 20) : step;
+  kg = Math.max(min, kg);
+  return { kg, from: { reps: best.x.reps, kg: best.x.kg || 0 } };
 }
 function checkBlock(bl) {
   const items = (bl.items || []).filter(it => String(it.text || '').trim()).map(it => ({ text: it.text.trim(), detail: it.detail || '', timer: it.timer ? Math.round(it.timer * 60) : 0, ticks: Array(clamp(it.ticks || 1, 1, 6)).fill(false) }));
@@ -247,6 +259,7 @@ const unit = kg => (kg ? ' kg' : '');
 function compare(b, x, idx) {
   const last = lastFor(b.exId, b.lo, b.hi);
   if (!last) return { txt: 'first time', good: false };
+  if (!last.same) return { txt: 'first time at ' + range(b.lo, b.hi), good: false };
   const lw = last.all.filter(y => y.done)[idx];
   if (!lw) return { txt: 'a new set', good: false };
   const dk = r2((x.kg || 0) - (lw.kg || 0)), dr = x.reps - lw.reps;
@@ -1031,6 +1044,7 @@ function cardLab(b, x, i, fixing) {
 }
 function lastLine(b, x, i) {
   if (x.kind === 'warm') return '';
+  if (b.est) return 'from your ' + setTxt(b.est) + unit(b.est.kg);
   const lw = lastSet(b, b.sets.slice(0, i).filter(y => y.kind === 'work').length);
   return lw ? 'last ' + setTxt(lw) + unit(lw.kg) : '';
 }
@@ -1708,7 +1722,7 @@ function padSheet() {
   const b = liftAt(c, t), x = b.sets[t.i], isKg = sh.field === 'kg';
   const cur = isKg ? x.kg : x.reps, val = sh.buf !== '' ? parseFloat(sh.buf) || 0 : cur;
   const wi = b.sets.slice(0, t.i + 1).filter(y => y.kind === x.kind).length;
-  const last = lastFor(b.exId, b.lo, b.hi), lw = x.kind === 'work' && last ? last.all.filter(y => y.done)[wi - 1] : null;
+  const last = lastFor(b.exId, b.lo, b.hi), lw = x.kind === 'work' && last && last.same ? last.all.filter(y => y.done)[wi - 1] : null;
   const title = sh.work ? 'Working weight, kg' : (isKg ? 'Weight' : 'Reps') + ', ' + (x.kind === 'warm' ? 'warm-up ' : 'set ') + wi;
   const st = isKg ? b.step : 1, base = val == null ? 0 : val;
   const chips = [-2 * st, -st, st, 2 * st].map(dl => '<button data-a="padSet" data-v="' + Math.max(0, r2(base + dl)) + '" aria-label="' + (dl > 0 ? 'Add ' : 'Take off ') + fmt(Math.abs(dl)) + '">' + (dl > 0 ? '+' : '−') + fmt(Math.abs(dl)) + '</button>').join('');
